@@ -1,0 +1,37 @@
+[package]
+name = "univrs-enr"
+version = "0.1.0"
+edition = "2021"
+description = "Entropy-Nexus-Revival economic primitive for VUDO OS"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/univrs/enr"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+hex = "0.4"
+
+# Crypto
+ed25519-dalek = "2"
+rand = "0.8"
+
+# Internal dependencies (uncomment when ready)
+# univrs-network = { path = "../univrs-network" }
+# univrs-identity = { path = "../univrs-identity" }
+
+[dev-dependencies]
+tokio-test = "0.4"
+proptest = "1"
+criterion = "0.5"
+
+[features]
+default = []
+chaos-testing = []
+
+# [[bench]]
+# name = "entropy_bench"
+# harness = false
