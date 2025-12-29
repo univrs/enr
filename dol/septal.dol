@@ -1,0 +1,463 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ENR Septal Gate (Circuit Breaker) - Design Ontology Language Specification
+// File: specifications/enr/septal.dol
+// Version: 0.1.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+module enr.septal @ 0.1.0
+
+use enr.core.{ 
+    NodeId, SeptalGate, SeptalGateState, SeptalGateConfig, 
+    SeptalGateManager, HealthStatus, Credits, Timestamp, Duration,
+    RevivalEvent, RevivalEventType
+}
+
+exegesis {
+    Septal gate (circuit breaker) implementation for the ENR system.
+    Named after the septal pores in fungal hyphae that can be plugged
+    by Woronin bodies to isolate damage.
+    
+    State machine:
+    - Open: Normal operation, traffic flows freely
+    - HalfOpen: Testing recovery, limited traffic
+    - Closed: Isolated, no traffic allowed (Woronin active)
+    
+    Transitions:
+    - Open → Closed: Failure threshold exceeded
+    - Closed → HalfOpen: Recovery timeout elapsed
+    - HalfOpen → Open: Recovery test passed
+    - HalfOpen → Closed: Recovery test failed
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const FAILURE_THRESHOLD: UInt32 = 5                    // Failures before isolation
+const RECOVERY_TIMEOUT: Duration = Duration::seconds(60)  // Time before recovery test
+const HALF_OPEN_TEST_INTERVAL: Duration = Duration::seconds(10)  // Time between tests
+const ISOLATION_THRESHOLD: Float64 = 0.7               // Weighted score threshold
+
+// Health check timeouts
+const PING_TIMEOUT: Duration = Duration::seconds(5)
+const HEALTH_CHECK_INTERVAL: Duration = Duration::seconds(10)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HEALTH CHECKING
+// ═══════════════════════════════════════════════════════════════════════════
+
+fun check_node_health(node: NodeId) -> HealthStatus {
+    exegesis {
+        Check the health of a node across all dimensions.
+        
+        Dimensions:
+        - Timeout: Can we reach the node?
+        - Credit: Can the node meet its obligations?
+        - Reputation: Is the node trustworthy?
+        
+        Each dimension scored 0.0 (healthy) to 1.0 (unhealthy).
+    }
+    
+    // Timeout check
+    ping_result = ping_node(node, PING_TIMEOUT)
+    timeout_score = if ping_result.is_ok() {
+        0.0
+    } else {
+        1.0
+    }
+    
+    // Credit check
+    balance = get_credit_balance(node)
+    outstanding = get_outstanding_obligations(node)
+    credit_score = if balance.amount >= outstanding.amount {
+        0.0
+    } else {
+        diff = outstanding.amount - balance.amount
+        min(diff as Float64 / outstanding.amount.max(1) as Float64, 1.0)
+    }
+    
+    // Reputation check
+    reputation = get_reputation(node)
+    reputation_score = 1.0 - reputation  // Invert: low reputation = high score
+    
+    // Aggregate health status
+    is_healthy = timeout_score < 0.5 and credit_score < 0.5 and reputation_score < 0.5
+    
+    return HealthStatus {
+        is_healthy,
+        timeout_score,
+        credit_score,
+        reputation_score,
+        last_check: now()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ISOLATION DECISION
+// ═══════════════════════════════════════════════════════════════════════════
+
+fun should_isolate(health: HealthStatus, config: SeptalGateConfig) -> Bool {
+    exegesis {
+        Determine if a node should be isolated based on health status.
+        
+        Formula:
+        weighted_score = timeout_score * timeout_weight
+                       + credit_score * credit_default_weight
+                       + reputation_score * reputation_weight
+                       
+        Isolate if weighted_score >= ISOLATION_THRESHOLD (0.7)
+    }
+    
+    weighted_score = 
+        health.timeout_score * config.timeout_weight +
+        health.credit_score * config.credit_default_weight +
+        health.reputation_score * config.reputation_weight
+    
+    return weighted_score >= ISOLATION_THRESHOLD
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE TRANSITIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene SeptalGateTransition {
+    exegesis {
+        Record of a state transition in a septal gate.
+    }
+    
+    has from_state: SeptalGateState
+    has to_state: SeptalGateState
+    has reason: String
+    has timestamp: Timestamp
+}
+
+fun transition_gate(
+    gate: SeptalGate,
+    health: HealthStatus,
+    config: SeptalGateConfig
+) -> Option<SeptalGateTransition> {
+    exegesis {
+        Determine state transition for a septal gate.
+        
+        State machine:
+        - Open → Closed: Failure threshold exceeded
+        - Closed → HalfOpen: Recovery timeout elapsed
+        - HalfOpen → Open: Recovery test passed
+        - HalfOpen → Closed: Recovery test failed
+    }
+    
+    match gate.state {
+        SeptalGateState::Open => {
+            // Check if we should isolate
+            if should_isolate(health, config) {
+                // Increment failure count
+                gate.failure_count += 1
+                gate.last_failure = Some(now())
+                
+                if gate.failure_count >= FAILURE_THRESHOLD {
+                    // Threshold exceeded, close the gate
+                    return Some(SeptalGateTransition {
+                        from_state: SeptalGateState::Open,
+                        to_state: SeptalGateState::Closed,
+                        reason: "Failure threshold exceeded (" + 
+                                gate.failure_count.to_string() + " failures)",
+                        timestamp: now()
+                    })
+                }
+            } else {
+                // Success, reset failure count
+                gate.failure_count = 0
+            }
+            return None
+        }
+        
+        SeptalGateState::Closed => {
+            // Check if recovery timeout has elapsed
+            if gate.isolation_start.is_none() {
+                return None
+            }
+            
+            isolation_duration = now() - gate.isolation_start.unwrap()
+            
+            if isolation_duration >= RECOVERY_TIMEOUT {
+                // Time to test recovery
+                return Some(SeptalGateTransition {
+                    from_state: SeptalGateState::Closed,
+                    to_state: SeptalGateState::HalfOpen,
+                    reason: "Recovery timeout elapsed, testing recovery",
+                    timestamp: now()
+                })
+            }
+            return None
+        }
+        
+        SeptalGateState::HalfOpen => {
+            // Test recovery
+            if health.is_healthy {
+                // Recovery successful
+                return Some(SeptalGateTransition {
+                    from_state: SeptalGateState::HalfOpen,
+                    to_state: SeptalGateState::Open,
+                    reason: "Recovery test passed",
+                    timestamp: now()
+                })
+            } else {
+                // Recovery failed, close again
+                return Some(SeptalGateTransition {
+                    from_state: SeptalGateState::HalfOpen,
+                    to_state: SeptalGateState::Closed,
+                    reason: "Recovery test failed",
+                    timestamp: now()
+                })
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WORONIN BODY (Isolation Mechanism)
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene WoroninBody {
+    exegesis {
+        Isolation mechanism that plugs septal pores.
+        Named after the biological structure that isolates damaged fungal cells.
+        
+        When activated, prevents all credit flow to/from the isolated node.
+    }
+    
+    has node: NodeId
+    has activated_at: Timestamp
+    has reason: String
+    has blocked_transactions: UInt64
+}
+
+fun activate_woronin(node: NodeId, reason: String) -> WoroninBody {
+    exegesis {
+        Activate Woronin body to isolate a node.
+        Blocks all credit transactions to/from the node.
+    }
+    
+    // Block pending transactions
+    pending = get_pending_transactions(node)
+    for tx in pending {
+        cancel_transaction(tx)
+    }
+    
+    // Mark node as isolated in routing
+    mark_node_isolated(node)
+    
+    return WoroninBody {
+        node,
+        activated_at: now(),
+        reason,
+        blocked_transactions: pending.len() as UInt64
+    }
+}
+
+fun deactivate_woronin(woronin: WoroninBody) -> Bool {
+    exegesis {
+        Deactivate Woronin body, allowing traffic to resume.
+        Returns true if successful.
+    }
+    
+    // Verify node is healthy before deactivating
+    health = check_node_health(woronin.node)
+    
+    if not health.is_healthy {
+        return false
+    }
+    
+    // Unmark node in routing
+    unmark_node_isolated(woronin.node)
+    
+    return true
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEPTAL GATE MANAGER IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+system StandardSeptalGateManager {
+    exegesis {
+        Standard implementation of the SeptalGateManager trait.
+        Manages circuit breakers for all node connections.
+    }
+    
+    state gates: Map<NodeId, SeptalGate>
+    state woronin_bodies: Map<NodeId, WoroninBody>
+    state config: SeptalGateConfig
+    state transitions_log: List<SeptalGateTransition>
+    
+    provides new() -> Self {
+        StandardSeptalGateManager {
+            gates: {},
+            woronin_bodies: {},
+            config: SeptalGateConfig::default(),
+            transitions_log: []
+        }
+    }
+    
+    provides with_config(config: SeptalGateConfig) -> Self {
+        StandardSeptalGateManager {
+            gates: {},
+            woronin_bodies: {},
+            config,
+            transitions_log: []
+        }
+    }
+    
+    fun get_or_create_gate(node: NodeId) -> SeptalGate {
+        if this.gates.contains_key(node) {
+            return this.gates.get(node).unwrap()
+        }
+        
+        gate = SeptalGate {
+            node,
+            state: SeptalGateState::Open,
+            failure_count: 0,
+            last_failure: None,
+            isolation_start: None
+        }
+        this.gates.insert(node, gate)
+        return gate
+    }
+    
+    impl SeptalGateManager {
+        is check_health(node: NodeId) -> HealthStatus {
+            return check_node_health(node)
+        }
+        
+        is should_isolate(node: NodeId, config: SeptalGateConfig) -> Bool {
+            health = check_node_health(node)
+            return should_isolate(health, config)
+        }
+        
+        is isolate(node: NodeId) -> Result<Void, Error> {
+            gate = this.get_or_create_gate(node)
+            
+            // Update gate state
+            gate.state = SeptalGateState::Closed
+            gate.isolation_start = Some(now())
+            this.gates.insert(node, gate)
+            
+            // Activate Woronin body
+            woronin = activate_woronin(node, "Manual isolation requested")
+            this.woronin_bodies.insert(node, woronin)
+            
+            // Log transition
+            this.transitions_log.push(SeptalGateTransition {
+                from_state: SeptalGateState::Open,
+                to_state: SeptalGateState::Closed,
+                reason: "Manual isolation",
+                timestamp: now()
+            })
+            
+            // Emit revival event
+            emit_event(RevivalEvent {
+                event_type: RevivalEventType::SeptalIsolation,
+                source: node,
+                credits: get_credit_balance(node),
+                timestamp: now(),
+                metadata: { "reason": "manual_isolation" }
+            })
+            
+            return Ok(())
+        }
+        
+        is attempt_recovery(node: NodeId) -> Result<Bool, Error> {
+            // Get gate state
+            if not this.gates.contains_key(node) {
+                return Err(Error::NotFound("Gate not found for node"))
+            }
+            
+            gate = this.gates.get(node).unwrap()
+            
+            if gate.state != SeptalGateState::Closed {
+                return Err(Error::InvalidState("Gate not closed"))
+            }
+            
+            // Check health
+            health = check_node_health(node)
+            
+            // Attempt transition
+            transition = transition_gate(gate, health, this.config)
+            
+            match transition {
+                Some(t) => {
+                    // Apply transition
+                    gate.state = t.to_state
+                    this.gates.insert(node, gate)
+                    this.transitions_log.push(t)
+                    
+                    if t.to_state == SeptalGateState::Open {
+                        // Recovery successful, deactivate Woronin
+                        if this.woronin_bodies.contains_key(node) {
+                            woronin = this.woronin_bodies.get(node).unwrap()
+                            deactivate_woronin(woronin)
+                            this.woronin_bodies.remove(node)
+                        }
+                        
+                        gate.failure_count = 0
+                        gate.isolation_start = None
+                        this.gates.insert(node, gate)
+                        
+                        return Ok(true)
+                    } else if t.to_state == SeptalGateState::HalfOpen {
+                        // Entered testing phase
+                        return Ok(false)
+                    } else {
+                        // Recovery failed, stayed closed
+                        return Ok(false)
+                    }
+                }
+                None => {
+                    // No transition, still closed
+                    return Ok(false)
+                }
+            }
+        }
+    }
+    
+    // Periodic health check
+    fun tick() {
+        exegesis {
+            Periodic tick to check all gates and apply transitions.
+            Should be called at HEALTH_CHECK_INTERVAL.
+        }
+        
+        for (node, gate) in this.gates.iter() {
+            health = check_node_health(node)
+            transition = transition_gate(gate, health, this.config)
+            
+            if transition.is_some() {
+                t = transition.unwrap()
+                gate.state = t.to_state
+                
+                // Handle state-specific actions
+                match t.to_state {
+                    SeptalGateState::Closed => {
+                        gate.isolation_start = Some(now())
+                        woronin = activate_woronin(node, t.reason)
+                        this.woronin_bodies.insert(node, woronin)
+                    }
+                    SeptalGateState::Open => {
+                        gate.failure_count = 0
+                        gate.isolation_start = None
+                        if this.woronin_bodies.contains_key(node) {
+                            woronin = this.woronin_bodies.get(node).unwrap()
+                            deactivate_woronin(woronin)
+                            this.woronin_bodies.remove(node)
+                        }
+                    }
+                    SeptalGateState::HalfOpen => {
+                        // Testing phase, no action needed
+                    }
+                }
+                
+                this.gates.insert(node, gate)
+                this.transitions_log.push(t)
+            }
+        }
+    }
+}

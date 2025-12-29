@@ -1,0 +1,650 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ENR Pricing Models - Design Ontology Language Specification
+// File: specifications/enr/pricing.dol
+// Version: 0.1.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+module enr.pricing @ 0.1.0
+
+use enr.core.{ Credits, NodeId, ResourceType, Timestamp, Duration }
+use enr.entropy.{ EntropyAccount, entropy_price_multiplier }
+
+exegesis {
+    Pricing models built on ENR primitives.
+    ENR provides the foundation; these models consume ENR services.
+    
+    Three pricing strategies:
+    - Fixed Rate: Predictable pricing for SLA-bound services
+    - Dynamic: Supply/demand based for elastic workloads
+    - Auction: Competitive bidding for scarce resources
+    
+    All prices are adjusted by entropy multiplier.
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRICING TRAITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+trait PricingModel {
+    exegesis {
+        Base trait for all pricing models.
+    }
+    
+    is calculate_price(request: ResourceRequest, entropy: EntropyAccount) -> PriceQuote
+    is name() -> String
+}
+
+gene ResourceRequest {
+    exegesis {
+        A request for resources to be priced.
+    }
+    
+    has resource_type: ResourceType
+    has quantity: UInt64
+    has duration: Duration
+    has priority: Priority
+    has requester: NodeId
+}
+
+gene Priority {
+    type: enum {
+        Low,        // Best effort
+        Normal,     // Standard priority
+        High,       // Elevated priority
+        Critical    // Must have
+    }
+}
+
+gene PriceQuote {
+    exegesis {
+        A price quote for a resource request.
+    }
+    
+    has base_price: Credits
+    has entropy_cost: Credits
+    has total_price: Credits
+    has valid_until: Timestamp
+    has pricing_model: String
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIXED RATE PRICING
+// Formula: price = FIXED_RATE × resource_units × entropy_multiplier
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene FixedRateConfig {
+    exegesis {
+        Configuration for fixed rate pricing.
+    }
+    
+    has cpu_rate_per_second: Credits        // Credits per CPU-second
+    has memory_rate_per_gb_hour: Credits    // Credits per GB-hour
+    has storage_rate_per_gb_month: Credits  // Credits per GB-month
+    has bandwidth_rate_per_gb: Credits      // Credits per GB transferred
+    has gpu_rate_per_second: Credits        // Credits per GPU-second
+    
+    provides default() -> Self {
+        FixedRateConfig {
+            cpu_rate_per_second: Credits { amount: 1 },
+            memory_rate_per_gb_hour: Credits { amount: 10 },
+            storage_rate_per_gb_month: Credits { amount: 5 },
+            bandwidth_rate_per_gb: Credits { amount: 2 },
+            gpu_rate_per_second: Credits { amount: 10 }
+        }
+    }
+}
+
+fun calculate_fixed_base_price(
+    request: ResourceRequest,
+    config: FixedRateConfig
+) -> Credits {
+    exegesis {
+        Calculate base price using fixed rates.
+        
+        Formula: base_price = FIXED_RATE × resource_units
+    }
+    
+    match request.resource_type {
+        ResourceType::Cpu => {
+            // CPU-seconds
+            units = request.quantity * request.duration.as_seconds()
+            return Credits { 
+                amount: units * config.cpu_rate_per_second.amount 
+            }
+        }
+        
+        ResourceType::Memory => {
+            // GB-hours
+            gb = request.quantity as Float64 / (1024.0 * 1024.0 * 1024.0)
+            hours = request.duration.as_hours()
+            units = (gb * hours) as UInt64
+            return Credits { 
+                amount: units * config.memory_rate_per_gb_hour.amount 
+            }
+        }
+        
+        ResourceType::Storage => {
+            // GB-months (prorated)
+            gb = request.quantity as Float64 / (1024.0 * 1024.0 * 1024.0)
+            months = request.duration.as_days() as Float64 / 30.0
+            units = (gb * months) as UInt64
+            return Credits { 
+                amount: units * config.storage_rate_per_gb_month.amount 
+            }
+        }
+        
+        ResourceType::Bandwidth => {
+            // GB transferred
+            gb = request.quantity as Float64 / (1024.0 * 1024.0 * 1024.0)
+            units = gb as UInt64
+            return Credits { 
+                amount: units * config.bandwidth_rate_per_gb.amount 
+            }
+        }
+        
+        ResourceType::Gpu => {
+            // GPU-seconds
+            units = request.quantity * request.duration.as_seconds()
+            return Credits { 
+                amount: units * config.gpu_rate_per_second.amount 
+            }
+        }
+    }
+}
+
+system FixedRatePricing {
+    exegesis {
+        Fixed rate pricing model.
+        
+        Use case: Predictable workloads, SLA-bound services.
+        
+        Formula: price = FIXED_RATE × resource_units × entropy_multiplier
+    }
+    
+    state config: FixedRateConfig
+    
+    provides new() -> Self {
+        FixedRatePricing { config: FixedRateConfig::default() }
+    }
+    
+    provides with_config(config: FixedRateConfig) -> Self {
+        FixedRatePricing { config }
+    }
+    
+    impl PricingModel {
+        is calculate_price(request: ResourceRequest, entropy: EntropyAccount) -> PriceQuote {
+            // Calculate base price
+            base_price = calculate_fixed_base_price(request, this.config)
+            
+            // Apply entropy multiplier
+            multiplier = entropy_price_multiplier(entropy)
+            entropy_cost = Credits {
+                amount: ((base_price.amount as Float64) * (multiplier - 1.0)) as UInt64
+            }
+            
+            total_price = Credits { 
+                amount: base_price.amount + entropy_cost.amount 
+            }
+            
+            return PriceQuote {
+                base_price,
+                entropy_cost,
+                total_price,
+                valid_until: now() + Duration::minutes(5),
+                pricing_model: "fixed_rate"
+            }
+        }
+        
+        is name() -> String {
+            return "FixedRatePricing"
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DYNAMIC SUPPLY/DEMAND PRICING
+// Formula: price = f(supply, demand) × entropy_multiplier
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene DynamicPricingConfig {
+    exegesis {
+        Configuration for dynamic pricing.
+    }
+    
+    has min_price: Credits              // Floor price
+    has max_price: Credits              // Ceiling price
+    has base_price: Credits             // Price at equilibrium
+    has sensitivity: Float64            // How quickly price responds
+    has smoothing_factor: Float64       // EMA smoothing (0-1)
+    
+    provides default() -> Self {
+        DynamicPricingConfig {
+            min_price: Credits { amount: 1 },
+            max_price: Credits { amount: 1000 },
+            base_price: Credits { amount: 10 },
+            sensitivity: 0.5,
+            smoothing_factor: 0.3
+        }
+    }
+}
+
+gene MarketState {
+    exegesis {
+        Current market state for a resource type.
+    }
+    
+    has resource_type: ResourceType
+    has supply: UInt64              // Available units
+    has demand: UInt64              // Requested units
+    has current_price: Credits
+    has last_update: Timestamp
+}
+
+fun calculate_supply_demand_ratio(supply: UInt64, demand: UInt64) -> Float64 {
+    exegesis {
+        Calculate the supply/demand ratio.
+        
+        > 1.0: Excess supply (lower prices)
+        = 1.0: Equilibrium
+        < 1.0: Excess demand (higher prices)
+    }
+    
+    if demand == 0 {
+        return 10.0  // Lots of supply, minimum demand
+    }
+    
+    return supply as Float64 / demand as Float64
+}
+
+fun calculate_dynamic_price(
+    state: MarketState,
+    config: DynamicPricingConfig
+) -> Credits {
+    exegesis {
+        Calculate price based on supply/demand dynamics.
+        
+        Formula:
+        ratio = supply / demand
+        price = base_price × (1 / ratio) ^ sensitivity
+        price = clamp(price, min_price, max_price)
+    }
+    
+    ratio = calculate_supply_demand_ratio(state.supply, state.demand)
+    
+    // Inverse relationship: low ratio = high price
+    // price = base × (1/ratio)^sensitivity
+    price_factor = (1.0 / ratio).pow(config.sensitivity)
+    
+    raw_price = config.base_price.amount as Float64 * price_factor
+    
+    // Clamp to bounds
+    clamped_price = raw_price
+        .max(config.min_price.amount as Float64)
+        .min(config.max_price.amount as Float64)
+    
+    return Credits { amount: clamped_price as UInt64 }
+}
+
+system DynamicPricing {
+    exegesis {
+        Dynamic supply/demand pricing model.
+        
+        Use case: Elastic workloads, spot instances, batch jobs.
+        
+        Formula: price = f(supply, demand) × entropy_multiplier
+    }
+    
+    state config: DynamicPricingConfig
+    state market_states: Map<ResourceType, MarketState>
+    
+    provides new() -> Self {
+        DynamicPricing { 
+            config: DynamicPricingConfig::default(),
+            market_states: {}
+        }
+    }
+    
+    fun update_market_state(resource: ResourceType, supply: UInt64, demand: UInt64) {
+        state = this.market_states.get(resource).unwrap_or(MarketState {
+            resource_type: resource,
+            supply: 0,
+            demand: 0,
+            current_price: this.config.base_price,
+            last_update: now()
+        })
+        
+        // EMA smoothing for supply/demand
+        alpha = this.config.smoothing_factor
+        smoothed_supply = (alpha * supply as Float64 + 
+                          (1.0 - alpha) * state.supply as Float64) as UInt64
+        smoothed_demand = (alpha * demand as Float64 + 
+                          (1.0 - alpha) * state.demand as Float64) as UInt64
+        
+        state.supply = smoothed_supply
+        state.demand = smoothed_demand
+        state.current_price = calculate_dynamic_price(state, this.config)
+        state.last_update = now()
+        
+        this.market_states.insert(resource, state)
+    }
+    
+    impl PricingModel {
+        is calculate_price(request: ResourceRequest, entropy: EntropyAccount) -> PriceQuote {
+            // Get or create market state
+            state = this.market_states.get(request.resource_type)
+                .unwrap_or(MarketState {
+                    resource_type: request.resource_type,
+                    supply: 1000,
+                    demand: 500,
+                    current_price: this.config.base_price,
+                    last_update: now()
+                })
+            
+            // Calculate base price from market state
+            unit_price = calculate_dynamic_price(state, this.config)
+            base_price = Credits { 
+                amount: unit_price.amount * request.quantity 
+            }
+            
+            // Apply entropy multiplier
+            multiplier = entropy_price_multiplier(entropy)
+            entropy_cost = Credits {
+                amount: ((base_price.amount as Float64) * (multiplier - 1.0)) as UInt64
+            }
+            
+            total_price = Credits { 
+                amount: base_price.amount + entropy_cost.amount 
+            }
+            
+            return PriceQuote {
+                base_price,
+                entropy_cost,
+                total_price,
+                valid_until: now() + Duration::seconds(30),  // Short validity
+                pricing_model: "dynamic"
+            }
+        }
+        
+        is name() -> String {
+            return "DynamicPricing"
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUCTION PRICING
+// Formula: price = winning_bid + entropy_cost
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene AuctionType {
+    type: enum {
+        FirstPrice,     // Winner pays their bid
+        SecondPrice,    // Winner pays second-highest bid
+        Dutch,          // Descending price auction
+        Sealed          // All bids submitted secretly
+    }
+}
+
+gene Bid {
+    exegesis {
+        A bid in a resource auction.
+    }
+    
+    has bidder: NodeId
+    has amount: Credits
+    has quantity: UInt64
+    has timestamp: Timestamp
+}
+
+gene Auction {
+    exegesis {
+        An auction for scarce resources.
+    }
+    
+    has id: UInt64
+    has resource_type: ResourceType
+    has available_quantity: UInt64
+    has auction_type: AuctionType
+    has reserve_price: Credits          // Minimum acceptable bid
+    has start_time: Timestamp
+    has end_time: Timestamp
+    has bids: List<Bid>
+    has winner: Option<NodeId>
+    has winning_bid: Option<Credits>
+}
+
+gene AuctionConfig {
+    exegesis {
+        Configuration for auction pricing.
+    }
+    
+    has default_auction_type: AuctionType
+    has auction_duration: Duration
+    has min_bid_increment: Credits
+    
+    provides default() -> Self {
+        AuctionConfig {
+            default_auction_type: AuctionType::SecondPrice,
+            auction_duration: Duration::minutes(5),
+            min_bid_increment: Credits { amount: 1 }
+        }
+    }
+}
+
+fun determine_winner(auction: Auction) -> Option<Tuple<NodeId, Credits>> {
+    exegesis {
+        Determine the winner of an auction.
+        
+        For second-price auctions, winner pays second-highest bid.
+    }
+    
+    if auction.bids.is_empty() {
+        return None
+    }
+    
+    // Sort bids by amount descending
+    sorted_bids = auction.bids.sort_by(|b| b.amount.amount).rev()
+    
+    // Filter bids meeting reserve price
+    valid_bids = sorted_bids
+        .iter()
+        .filter(|b| b.amount.amount >= auction.reserve_price.amount)
+        .collect()
+    
+    if valid_bids.is_empty() {
+        return None
+    }
+    
+    winner = valid_bids[0]
+    
+    winning_price = match auction.auction_type {
+        AuctionType::FirstPrice => winner.amount,
+        AuctionType::SecondPrice => {
+            if valid_bids.len() > 1 {
+                valid_bids[1].amount
+            } else {
+                auction.reserve_price
+            }
+        }
+        AuctionType::Dutch => winner.amount,
+        AuctionType::Sealed => winner.amount
+    }
+    
+    return Some((winner.bidder, winning_price))
+}
+
+system AuctionPricing {
+    exegesis {
+        Auction-based pricing model.
+        
+        Use case: Scarce resources, premium placement, priority access.
+        
+        Formula: price = winning_bid + entropy_cost
+    }
+    
+    state config: AuctionConfig
+    state active_auctions: Map<UInt64, Auction>
+    state next_auction_id: UInt64
+    
+    provides new() -> Self {
+        AuctionPricing { 
+            config: AuctionConfig::default(),
+            active_auctions: {},
+            next_auction_id: 1
+        }
+    }
+    
+    fun create_auction(
+        resource_type: ResourceType,
+        quantity: UInt64,
+        reserve_price: Credits
+    ) -> Auction {
+        id = this.next_auction_id
+        this.next_auction_id += 1
+        
+        auction = Auction {
+            id,
+            resource_type,
+            available_quantity: quantity,
+            auction_type: this.config.default_auction_type,
+            reserve_price,
+            start_time: now(),
+            end_time: now() + this.config.auction_duration,
+            bids: [],
+            winner: None,
+            winning_bid: None
+        }
+        
+        this.active_auctions.insert(id, auction)
+        return auction
+    }
+    
+    fun place_bid(auction_id: UInt64, bid: Bid) -> Result<Void, Error> {
+        auction = this.active_auctions.get(auction_id)?
+        
+        if now() > auction.end_time {
+            return Err(Error::AuctionClosed)
+        }
+        
+        if bid.amount.amount < auction.reserve_price.amount {
+            return Err(Error::BidBelowReserve)
+        }
+        
+        // Check minimum increment
+        if auction.bids.len() > 0 {
+            highest = auction.bids.iter().max_by(|b| b.amount.amount).unwrap()
+            min_bid = highest.amount.amount + this.config.min_bid_increment.amount
+            if bid.amount.amount < min_bid {
+                return Err(Error::BidIncrementTooSmall)
+            }
+        }
+        
+        auction.bids.push(bid)
+        this.active_auctions.insert(auction_id, auction)
+        
+        return Ok(())
+    }
+    
+    fun finalize_auction(auction_id: UInt64) -> Option<Tuple<NodeId, Credits>> {
+        auction = this.active_auctions.get(auction_id)?
+        
+        result = determine_winner(auction)
+        
+        if result.is_some() {
+            (winner, price) = result.unwrap()
+            auction.winner = Some(winner)
+            auction.winning_bid = Some(price)
+            this.active_auctions.insert(auction_id, auction)
+        }
+        
+        return result
+    }
+    
+    impl PricingModel {
+        is calculate_price(request: ResourceRequest, entropy: EntropyAccount) -> PriceQuote {
+            // For auction pricing, we return the reserve price as base
+            // Actual price determined by auction outcome
+            
+            // Calculate entropy-adjusted reserve price
+            multiplier = entropy_price_multiplier(entropy)
+            base_reserve = Credits { amount: 100 }  // Default reserve
+            
+            entropy_cost = Credits {
+                amount: ((base_reserve.amount as Float64) * (multiplier - 1.0)) as UInt64
+            }
+            
+            total_price = Credits { 
+                amount: base_reserve.amount + entropy_cost.amount 
+            }
+            
+            return PriceQuote {
+                base_price: base_reserve,
+                entropy_cost,
+                total_price,
+                valid_until: now() + this.config.auction_duration,
+                pricing_model: "auction"
+            }
+        }
+        
+        is name() -> String {
+            return "AuctionPricing"
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPOSITE PRICING
+// ═══════════════════════════════════════════════════════════════════════════
+
+system CompositePricing {
+    exegesis {
+        Composite pricing that combines multiple models.
+        
+        Use case: Complex workloads with mixed resource needs.
+        
+        Example: Spirit execution
+        - Base compute: Fixed rate
+        - Network transfer: Dynamic
+        - GPU placement: Auction
+    }
+    
+    state fixed_pricing: FixedRatePricing
+    state dynamic_pricing: DynamicPricing
+    state auction_pricing: AuctionPricing
+    state resource_model_map: Map<ResourceType, String>
+    
+    provides new() -> Self {
+        map = {
+            ResourceType::Cpu: "fixed",
+            ResourceType::Memory: "fixed",
+            ResourceType::Storage: "fixed",
+            ResourceType::Bandwidth: "dynamic",
+            ResourceType::Gpu: "auction"
+        }
+        
+        CompositePricing {
+            fixed_pricing: FixedRatePricing::new(),
+            dynamic_pricing: DynamicPricing::new(),
+            auction_pricing: AuctionPricing::new(),
+            resource_model_map: map
+        }
+    }
+    
+    impl PricingModel {
+        is calculate_price(request: ResourceRequest, entropy: EntropyAccount) -> PriceQuote {
+            model_name = this.resource_model_map.get(request.resource_type)
+                .unwrap_or("fixed")
+            
+            match model_name {
+                "fixed" => this.fixed_pricing.calculate_price(request, entropy),
+                "dynamic" => this.dynamic_pricing.calculate_price(request, entropy),
+                "auction" => this.auction_pricing.calculate_price(request, entropy),
+                _ => this.fixed_pricing.calculate_price(request, entropy)
+            }
+        }
+        
+        is name() -> String {
+            return "CompositePricing"
+        }
+    }
+}

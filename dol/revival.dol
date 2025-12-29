@@ -1,0 +1,520 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ENR Revival Pool - Design Ontology Language Specification
+// File: specifications/enr/revival.dol
+// Version: 0.1.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+module enr.revival @ 0.1.0
+
+use enr.core.{ 
+    NodeId, Credits, CreditTransfer, RevivalPool, RevivalEvent, 
+    RevivalEventType, RevivalManager, Timestamp, Duration, AccountId 
+}
+
+exegesis {
+    Revival pool management for the ENR system.
+    Implements resource cycling inspired by fungal decomposition.
+    
+    The revival pool collects credits from:
+    - Failed nodes
+    - Expired reservations
+    - Garbage collection
+    - Entropy tax on all transactions
+    
+    And redistributes to:
+    - Network maintenance (40%)
+    - New node subsidy (25%)
+    - Low-balance support (20%)
+    - Reserve buffer (15%)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Tax and timing
+const ENTROPY_TAX_RATE: Float64 = 0.02              // 2% tax on all transactions
+const REDISTRIBUTION_INTERVAL: Duration = Duration::hours(1)
+const DECOMPOSITION_PERIOD: Duration = Duration::minutes(5)
+const FAILURE_TIMEOUT: Duration = Duration::seconds(30)
+
+// Allocation percentages (must sum to 1.0)
+const NETWORK_MAINTENANCE_ALLOCATION: Float64 = 0.40
+const NEW_NODE_SUBSIDY_ALLOCATION: Float64 = 0.25
+const LOW_BALANCE_SUPPORT_ALLOCATION: Float64 = 0.20
+const RESERVE_BUFFER_ALLOCATION: Float64 = 0.15
+
+// Eligibility thresholds
+const SUBSIDY_THRESHOLD: Credits = Credits { amount: 100 }
+const NEW_NODE_AGE_LIMIT: Duration = Duration::days(7)
+const MIN_NEXUS_UPTIME_FOR_MAINTENANCE: Float64 = 0.95
+const MIN_REPUTATION_FOR_SUPPORT: Float64 = 0.5
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DECOMPOSITION STATE MACHINE
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene DecompositionPhase {
+    type: enum {
+        CreditsFrozen,          // Phase 1: Credits locked
+        ReservationsReleased,   // Phase 2: Pending reservations returned
+        StateReclaimed,         // Phase 3: Orphaned state cleaned up
+        TopologyUpdated,        // Phase 4: Network topology adjusted
+        Complete                // Phase 5: Decomposition finished
+    }
+}
+
+gene DecompositionState {
+    exegesis {
+        State of a node being decomposed after failure.
+        Follows biological decomposition: freeze → release → reclaim → update.
+    }
+    
+    has node: NodeId
+    has phase: DecompositionPhase
+    has frozen_credits: Credits
+    has start_time: Timestamp
+    has events_emitted: List<RevivalEvent>
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FAILURE CONFIRMATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+fun confirm_failure(node: NodeId) -> Bool {
+    exegesis {
+        Confirm that a node has actually failed (not just a transient issue).
+        Uses multiple health checks to avoid false positives.
+    }
+    
+    // Try multiple pings
+    ping_results = [
+        ping_node(node, Duration::seconds(5)),
+        ping_node(node, Duration::seconds(5)),
+        ping_node(node, Duration::seconds(5))
+    ]
+    
+    successful_pings = ping_results.iter().filter(|r| r.is_ok()).count()
+    
+    // Must fail all pings
+    if successful_pings > 0 {
+        return false
+    }
+    
+    // Check last known activity
+    last_activity = get_last_activity(node)
+    time_since_activity = now() - last_activity
+    
+    if time_since_activity < FAILURE_TIMEOUT {
+        return false  // Recent activity, might be recovering
+    }
+    
+    return true
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DECOMPOSITION ALGORITHM
+// ═══════════════════════════════════════════════════════════════════════════
+
+fun decompose_failed_node(node: NodeId) -> List<RevivalEvent> {
+    exegesis {
+        Decompose a failed node, returning its resources to the revival pool.
+        
+        Algorithm:
+        1. Verify failure (avoid false alarms)
+        2. Freeze all node credits
+        3. Release held reservations to original holders
+        4. Reclaim orphaned state
+        5. Update network topology
+        6. Queue main decomposition event
+        
+        Returns list of revival events to process.
+    }
+    
+    events = []
+    
+    // Step 1: Verify failure
+    if not confirm_failure(node) {
+        return []  // False alarm
+    }
+    
+    // Step 2: Freeze credits
+    frozen_credits = freeze_node_credits(node)
+    events.push(RevivalEvent {
+        event_type: RevivalEventType::NodeFailure,
+        source: node,
+        credits: frozen_credits,
+        timestamp: now(),
+        metadata: { "phase": "freeze" }
+    })
+    
+    // Step 3: Release held reservations
+    reservations = get_held_reservations(node)
+    for reservation in reservations {
+        if not reservation.consumed {
+            // Return to original holder
+            events.push(RevivalEvent {
+                event_type: RevivalEventType::ReservationExpired,
+                source: node,
+                credits: reservation.amount,
+                timestamp: now(),
+                metadata: { 
+                    "reservation_id": reservation.id.to_string(),
+                    "original_holder": reservation.account.to_string()
+                }
+            })
+        }
+    }
+    
+    // Step 4: Reclaim stored state
+    stored_items = get_stored_items(node)
+    for item in stored_items {
+        if has_replicas(item) {
+            // Replicated data: just update replica set
+            remove_from_replica_set(item, node)
+        } else {
+            // Orphaned data: reclaim storage credits
+            storage_credits = estimate_storage_credits(item)
+            events.push(RevivalEvent {
+                event_type: RevivalEventType::GarbageCollected,
+                source: node,
+                credits: storage_credits,
+                timestamp: now(),
+                metadata: { "key": item.key }
+            })
+        }
+    }
+    
+    // Step 5: Update topology
+    role = get_node_role(node)
+    if role.role_type == NexusRoleType::Nexus {
+        // Trigger nexus re-election for this region
+        region = get_region_for_node(node)
+        trigger_nexus_election(region)
+    }
+    
+    // Step 6: Queue main decomposition completion
+    events.push(RevivalEvent {
+        event_type: RevivalEventType::NodeFailure,
+        source: node,
+        credits: frozen_credits,
+        timestamp: now(),
+        metadata: { 
+            "phase": "complete",
+            "decomposition_complete": (now() + DECOMPOSITION_PERIOD).to_string()
+        }
+    })
+    
+    return events
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CREDIT REDISTRIBUTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene RedistributionPlan {
+    exegesis {
+        Plan for redistributing revival pool credits.
+    }
+    
+    has maintenance_recipients: List<Tuple<NodeId, Credits>>
+    has subsidy_recipients: List<Tuple<NodeId, Credits>>
+    has support_recipients: List<Tuple<NodeId, Credits>>
+    has reserve_addition: Credits
+}
+
+fun plan_redistribution(pool: RevivalPool) -> RedistributionPlan {
+    exegesis {
+        Plan credit redistribution from the revival pool.
+        
+        Allocation:
+        - 40% Network maintenance (high-uptime nexus nodes)
+        - 25% New node subsidy (nodes < 7 days old)
+        - 20% Low-balance support (nodes with balance < threshold)
+        - 15% Reserve buffer (emergency fund)
+        
+        Eligibility:
+        - Maintenance: Nexus nodes with ≥95% uptime
+        - Subsidy: Nodes < 7 days old with passing health
+        - Support: Nodes with balance < 100 credits and ≥50% reputation
+    }
+    
+    // Calculate total available for distribution
+    total_available = pool.recycled_credits.amount + 
+                      pool.entropy_tax_collected.amount
+    
+    // Calculate budget for each category
+    maintenance_budget = Credits { 
+        amount: (total_available as Float64 * NETWORK_MAINTENANCE_ALLOCATION) as UInt64 
+    }
+    subsidy_budget = Credits { 
+        amount: (total_available as Float64 * NEW_NODE_SUBSIDY_ALLOCATION) as UInt64 
+    }
+    support_budget = Credits { 
+        amount: (total_available as Float64 * LOW_BALANCE_SUPPORT_ALLOCATION) as UInt64 
+    }
+    reserve_budget = Credits { 
+        amount: (total_available as Float64 * RESERVE_BUFFER_ALLOCATION) as UInt64 
+    }
+    
+    // Find maintenance recipients (high-uptime nexus nodes)
+    nexus_nodes = get_all_nexus_nodes()
+        .iter()
+        .filter(|n| get_uptime(n) >= MIN_NEXUS_UPTIME_FOR_MAINTENANCE)
+        .sort_by(|n| get_uptime(n))
+        .rev()
+        .collect()
+    
+    maintenance_per_node = if nexus_nodes.len() > 0 {
+        maintenance_budget.amount / nexus_nodes.len() as UInt64
+    } else {
+        0
+    }
+    
+    maintenance_recipients = nexus_nodes
+        .iter()
+        .map(|n| (n, Credits { amount: maintenance_per_node }))
+        .collect()
+    
+    // Find subsidy recipients (new nodes)
+    new_nodes = get_all_nodes()
+        .iter()
+        .filter(|n| get_node_age(n) < NEW_NODE_AGE_LIMIT)
+        .filter(|n| health_check_passing(n))
+        .collect()
+    
+    subsidy_per_node = if new_nodes.len() > 0 {
+        subsidy_budget.amount / new_nodes.len() as UInt64
+    } else {
+        0
+    }
+    
+    subsidy_recipients = new_nodes
+        .iter()
+        .map(|n| (n, Credits { amount: subsidy_per_node }))
+        .collect()
+    
+    // Find support recipients (low balance nodes)
+    struggling_nodes = get_all_nodes()
+        .iter()
+        .filter(|n| get_credit_balance(n) < SUBSIDY_THRESHOLD)
+        .filter(|n| get_reputation(n) >= MIN_REPUTATION_FOR_SUPPORT)
+        .collect()
+    
+    support_per_node = if struggling_nodes.len() > 0 {
+        support_budget.amount / struggling_nodes.len() as UInt64
+    } else {
+        0
+    }
+    
+    support_recipients = struggling_nodes
+        .iter()
+        .map(|n| (n, Credits { amount: support_per_node }))
+        .collect()
+    
+    return RedistributionPlan {
+        maintenance_recipients,
+        subsidy_recipients,
+        support_recipients,
+        reserve_addition: reserve_budget
+    }
+}
+
+fun execute_redistribution(
+    pool: RevivalPool, 
+    plan: RedistributionPlan
+) -> List<CreditTransfer> {
+    exegesis {
+        Execute the redistribution plan, creating credit transfers.
+    }
+    
+    transfers = []
+    pool_account = AccountId { 
+        node: NodeId { value: "revival_pool" }, 
+        account_type: AccountType::RevivalPool 
+    }
+    
+    // Maintenance transfers
+    for (node, amount) in plan.maintenance_recipients {
+        transfers.push(CreditTransfer {
+            from: pool_account,
+            to: AccountId { node, account_type: AccountType::Node },
+            amount,
+            entropy_cost: Credits::zero(),  // Pool transfers are free
+            timestamp: now()
+        })
+    }
+    
+    // Subsidy transfers
+    for (node, amount) in plan.subsidy_recipients {
+        transfers.push(CreditTransfer {
+            from: pool_account,
+            to: AccountId { node, account_type: AccountType::Node },
+            amount,
+            entropy_cost: Credits::zero(),
+            timestamp: now()
+        })
+    }
+    
+    // Support transfers
+    for (node, amount) in plan.support_recipients {
+        transfers.push(CreditTransfer {
+            from: pool_account,
+            to: AccountId { node, account_type: AccountType::Node },
+            amount,
+            entropy_cost: Credits::zero(),
+            timestamp: now()
+        })
+    }
+    
+    return transfers
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTROPY TAX CALCULATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+fun calculate_entropy_tax(transaction_amount: Credits) -> Credits {
+    exegesis {
+        Calculate entropy tax for a transaction.
+        
+        Formula: tax = transaction_amount * ENTROPY_TAX_RATE
+        
+        Tax rate: 2%
+    }
+    
+    tax_amount = (transaction_amount.amount as Float64 * ENTROPY_TAX_RATE) as UInt64
+    return Credits { amount: tax_amount }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REVIVAL MANAGER IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+system StandardRevivalManager {
+    exegesis {
+        Standard implementation of the RevivalManager trait.
+        Manages the revival pool and credit redistribution.
+    }
+    
+    state pool: RevivalPool
+    state pending_events: List<RevivalEvent>
+    state last_redistribution: Timestamp
+    state decomposition_states: Map<NodeId, DecompositionState>
+    
+    provides new() -> Self {
+        StandardRevivalManager {
+            pool: RevivalPool {
+                recycled_credits: Credits::zero(),
+                entropy_tax_collected: Credits::zero(),
+                maintenance_fund: Credits::zero(),
+                reserve_buffer: Credits::zero()
+            },
+            pending_events: [],
+            last_redistribution: now(),
+            decomposition_states: {}
+        }
+    }
+    
+    impl RevivalManager {
+        is process_event(event: RevivalEvent) -> Result<Void, Error> {
+            match event.event_type {
+                RevivalEventType::NodeFailure => {
+                    // Credits from failed node go to recycled pool
+                    this.pool.recycled_credits.amount += event.credits.amount
+                }
+                
+                RevivalEventType::ReservationExpired => {
+                    // Direct return to original holder (no pool)
+                    original_holder = event.metadata.get("original_holder")
+                        .and_then(|s| parse_node_id(s))
+                    
+                    if original_holder.is_some() {
+                        transfer_credits_direct(
+                            this.pool, 
+                            original_holder.unwrap(), 
+                            event.credits
+                        )
+                    } else {
+                        // Can't identify holder, add to recycled
+                        this.pool.recycled_credits.amount += event.credits.amount
+                    }
+                }
+                
+                RevivalEventType::GarbageCollected => {
+                    // GC credits go to maintenance fund
+                    this.pool.maintenance_fund.amount += event.credits.amount
+                }
+                
+                RevivalEventType::EntropyTax => {
+                    // Tax goes to entropy tax pool
+                    this.pool.entropy_tax_collected.amount += event.credits.amount
+                }
+                
+                RevivalEventType::SeptalIsolation => {
+                    // Isolated node credits held for recovery
+                    this.pool.recycled_credits.amount += event.credits.amount
+                }
+                
+                RevivalEventType::VoluntaryExit => {
+                    // Clean exit: direct return to node
+                    transfer_credits_direct(this.pool, event.source, event.credits)
+                }
+            }
+            
+            return Ok(())
+        }
+        
+        is redistribute(interval: Duration) -> List<CreditTransfer> {
+            // Check if redistribution interval has elapsed
+            if now() - this.last_redistribution < interval {
+                return []
+            }
+            
+            // Plan redistribution
+            plan = plan_redistribution(this.pool)
+            
+            // Execute redistribution
+            transfers = execute_redistribution(this.pool, plan)
+            
+            // Update pool state
+            this.pool.reserve_buffer.amount += plan.reserve_addition.amount
+            this.pool.recycled_credits = Credits::zero()
+            this.pool.entropy_tax_collected = Credits::zero()
+            this.last_redistribution = now()
+            
+            return transfers
+        }
+        
+        is decompose_node(node: NodeId) -> List<RevivalEvent> {
+            // Check if already decomposing
+            if this.decomposition_states.contains_key(node) {
+                return []  // Already in progress
+            }
+            
+            // Start decomposition
+            events = decompose_failed_node(node)
+            
+            if events.len() > 0 {
+                this.decomposition_states.insert(node, DecompositionState {
+                    node,
+                    phase: DecompositionPhase::CreditsFrozen,
+                    frozen_credits: events[0].credits,
+                    start_time: now(),
+                    events_emitted: events.clone()
+                })
+            }
+            
+            return events
+        }
+        
+        is total_pool_balance() -> Credits {
+            return Credits {
+                amount: this.pool.recycled_credits.amount +
+                        this.pool.entropy_tax_collected.amount +
+                        this.pool.maintenance_fund.amount +
+                        this.pool.reserve_buffer.amount
+            }
+        }
+    }
+}

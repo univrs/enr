@@ -1,0 +1,524 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ENR Nexus Topology - Design Ontology Language Specification
+// File: specifications/enr/nexus.dol
+// Version: 0.1.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+module enr.nexus @ 0.1.0
+
+use enr.core.{ 
+    NodeId, NexusRole, NexusRoleType, ResourceGradient, 
+    NexusTopology, NexusManager, Credits, Timestamp, Duration 
+}
+
+exegesis {
+    Nexus topology management for the ENR system.
+    Implements hierarchical hub-and-spoke architecture inspired by
+    mycelial network hub formation.
+    
+    Hierarchy:
+    - Leaf: Regular node, routes through nexus
+    - Nexus: Hub node, aggregates 5-50 leaves
+    - PoteauMitan: Super-nexus with global view
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Nexus eligibility thresholds
+const MIN_NEXUS_UPTIME: Float64 = 0.95           // 95% uptime required
+const MIN_NEXUS_BANDWIDTH: UInt64 = 10_000_000   // 10 Mbps minimum
+const MIN_NEXUS_REPUTATION: Float64 = 0.7        // 70% reputation score
+
+// Nexus capacity
+const MIN_LEAVES_PER_NEXUS: UInt32 = 5
+const MAX_LEAVES_PER_NEXUS: UInt32 = 50
+
+// Election weights
+const UPTIME_WEIGHT: Float64 = 0.3
+const BANDWIDTH_WEIGHT: Float64 = 0.3
+const REPUTATION_WEIGHT: Float64 = 0.2
+const CONNECTIVITY_WEIGHT: Float64 = 0.2
+
+// Timing
+const NEXUS_ELECTION_INTERVAL: Duration = Duration::hours(1)
+const GRADIENT_UPDATE_INTERVAL: Duration = Duration::seconds(10)
+
+// Market maker
+const MINIMUM_SPREAD: Float64 = 0.01            // 1% minimum spread
+const VOLATILITY_FACTOR: Float64 = 0.5
+const INVENTORY_FACTOR: Float64 = 0.3
+const ENTROPY_SPREAD_FACTOR: Float64 = 0.1
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GOSSIP ROUTING
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene GossipPathType {
+    type: enum {
+        Direct,      // Direct node-to-node
+        ViaHub,      // Through nexus hub
+        ViaSuperHub  // Through poteau-mitan
+    }
+}
+
+gene GossipPath {
+    exegesis {
+        Path for gossip message routing.
+        Can be direct (low entropy) or via hub (higher entropy budget).
+    }
+    
+    has path_type: GossipPathType
+    has hops: List<NodeId>
+    has estimated_entropy: Float64
+}
+
+fun estimate_direct_entropy(from: NodeId, to: NodeId) -> Float64 {
+    exegesis {
+        Estimate entropy for direct node-to-node path.
+    }
+    
+    // Implementation provided by network layer
+    network_distance = get_network_distance(from, to)
+    latency = get_latency(from, to)
+    
+    return network_distance * 0.5 + latency * 0.01
+}
+
+fun estimate_hub_entropy(from: NodeId, hub: NodeId, to: NodeId) -> Float64 {
+    exegesis {
+        Estimate entropy for path through hub.
+    }
+    
+    entropy_to_hub = estimate_direct_entropy(from, hub)
+    entropy_from_hub = estimate_direct_entropy(hub, to)
+    hub_processing = 0.1  // Fixed hub processing cost
+    
+    return entropy_to_hub + hub_processing + entropy_from_hub
+}
+
+fun determine_gossip_path(
+    from: NodeId,
+    to: NodeId,
+    from_role: NexusRole,
+    entropy_budget: Float64
+) -> GossipPath {
+    exegesis {
+        Determine optimal gossip path based on node roles and entropy budget.
+        
+        Algorithm:
+        - Leaves always route through their nexus
+        - Nexuses can go direct if entropy budget allows
+        - PoteauMitan always uses direct routing
+    }
+    
+    match from_role.role_type {
+        Leaf => {
+            // Leaves always route through their nexus
+            nexus = from_role.parent.expect("Leaf must have parent nexus")
+            return GossipPath {
+                path_type: GossipPathType::ViaHub,
+                hops: [nexus, to],
+                estimated_entropy: estimate_hub_entropy(from, nexus, to)
+            }
+        }
+        
+        Nexus => {
+            direct_entropy = estimate_direct_entropy(from, to)
+            
+            if direct_entropy <= entropy_budget {
+                // Direct routing within budget
+                return GossipPath {
+                    path_type: GossipPathType::Direct,
+                    hops: [to],
+                    estimated_entropy: direct_entropy
+                }
+            } else {
+                // Route through super-nexus
+                super_nexus = from_role.parent.unwrap_or(get_nearest_poteau_mitan())
+                return GossipPath {
+                    path_type: GossipPathType::ViaSuperHub,
+                    hops: [super_nexus, to],
+                    estimated_entropy: estimate_hub_entropy(from, super_nexus, to)
+                }
+            }
+        }
+        
+        PoteauMitan => {
+            // PoteauMitan always uses direct routing
+            return GossipPath {
+                path_type: GossipPathType::Direct,
+                hops: [to],
+                estimated_entropy: estimate_direct_entropy(from, to)
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GRADIENT AGGREGATION
+// Formula: nexus.gradient[r] = Σ(leaf.gradient[r] * weight) / Σ(weight)
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene LeafGradientReport {
+    exegesis {
+        Gradient report from a leaf node to its nexus.
+    }
+    
+    has node: NodeId
+    has gradient: ResourceGradient
+    has weight: Float64             // Based on capacity
+    has timestamp: Timestamp
+}
+
+fun aggregate_gradients(reports: List<LeafGradientReport>) -> ResourceGradient {
+    exegesis {
+        Aggregate gradients from leaf nodes using weighted average.
+        
+        Formula: nexus.gradient[resource] = 
+                 Σ(leaf.gradient[resource] * leaf.weight) / Σ(leaf.weight)
+    }
+    
+    // Calculate total weight
+    total_weight = reports.iter().map(|r| r.weight).sum()
+    
+    if total_weight == 0.0 {
+        return ResourceGradient::zero()
+    }
+    
+    // Weighted average for each resource
+    cpu = reports.iter()
+        .map(|r| r.gradient.cpu_available * r.weight)
+        .sum() / total_weight
+        
+    memory = reports.iter()
+        .map(|r| r.gradient.memory_available * r.weight)
+        .sum() / total_weight
+        
+    gpu = reports.iter()
+        .map(|r| r.gradient.gpu_available * r.weight)
+        .sum() / total_weight
+        
+    storage = reports.iter()
+        .map(|r| r.gradient.storage_available * r.weight)
+        .sum() / total_weight
+        
+    bandwidth = reports.iter()
+        .map(|r| r.gradient.bandwidth_available * r.weight)
+        .sum() / total_weight
+        
+    credits = reports.iter()
+        .map(|r| r.gradient.credit_balance * r.weight)
+        .sum() / total_weight
+    
+    return ResourceGradient {
+        cpu_available: cpu,
+        memory_available: memory,
+        gpu_available: gpu,
+        storage_available: storage,
+        bandwidth_available: bandwidth,
+        credit_balance: credits
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NEXUS ELECTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene Region {
+    exegesis {
+        A region of nodes that share a nexus.
+    }
+    
+    has id: String
+    has nodes: List<NodeId>
+    has current_nexus: Option<NodeId>
+}
+
+gene NexusCandidate {
+    exegesis {
+        A candidate for nexus election.
+    }
+    
+    has node: NodeId
+    has uptime: Float64
+    has bandwidth: UInt64
+    has reputation: Float64
+    has current_leaf_count: UInt32
+    has election_score: Float64
+}
+
+fun normalize_bandwidth(bandwidth: UInt64) -> Float64 {
+    exegesis {
+        Normalize bandwidth to [0, 1] for scoring.
+    }
+    
+    // 100 Mbps = 1.0
+    max_expected = 100_000_000 as Float64
+    return min(bandwidth as Float64 / max_expected, 1.0)
+}
+
+fun normalize_connectivity(leaf_count: UInt32) -> Float64 {
+    exegesis {
+        Normalize connectivity to [0, 1] for scoring.
+        Prefer nodes with moderate connectivity (not too few, not too many).
+    }
+    
+    optimal = (MIN_LEAVES_PER_NEXUS + MAX_LEAVES_PER_NEXUS) / 2
+    distance = abs(leaf_count as Int32 - optimal as Int32) as Float64
+    max_distance = MAX_LEAVES_PER_NEXUS as Float64
+    
+    return 1.0 - (distance / max_distance)
+}
+
+fun elect_nexus(region: Region) -> NodeId {
+    exegesis {
+        Elect a nexus node for the given region.
+        
+        Algorithm:
+        1. Filter qualified candidates (uptime, bandwidth, reputation)
+        2. If no qualified, use best available
+        3. Score by weighted criteria
+        4. Elect highest scorer
+        
+        Score = uptime * 0.3 + bandwidth * 0.3 + reputation * 0.2 + connectivity * 0.2
+    }
+    
+    // Step 1: Gather qualified candidates
+    candidates = region.nodes
+        .iter()
+        .filter(|n| get_uptime(n) >= MIN_NEXUS_UPTIME)
+        .filter(|n| get_bandwidth(n) >= MIN_NEXUS_BANDWIDTH)
+        .filter(|n| get_reputation(n) >= MIN_NEXUS_REPUTATION)
+        .map(|n| NexusCandidate {
+            node: n,
+            uptime: get_uptime(n),
+            bandwidth: get_bandwidth(n),
+            reputation: get_reputation(n),
+            current_leaf_count: get_connection_count(n),
+            election_score: 0.0
+        })
+        .collect()
+    
+    // Step 2: If no qualified candidates, use best available
+    if candidates.is_empty() {
+        candidates = region.nodes
+            .iter()
+            .sort_by(|n| get_reputation(n))
+            .rev()
+            .take(3)
+            .map(|n| NexusCandidate {
+                node: n,
+                uptime: get_uptime(n),
+                bandwidth: get_bandwidth(n),
+                reputation: get_reputation(n),
+                current_leaf_count: get_connection_count(n),
+                election_score: 0.0
+            })
+            .collect()
+    }
+    
+    // Step 3: Score candidates
+    for candidate in candidates.iter_mut() {
+        candidate.election_score = 
+            candidate.uptime * UPTIME_WEIGHT +
+            normalize_bandwidth(candidate.bandwidth) * BANDWIDTH_WEIGHT +
+            candidate.reputation * REPUTATION_WEIGHT +
+            normalize_connectivity(candidate.current_leaf_count) * CONNECTIVITY_WEIGHT
+    }
+    
+    // Step 4: Elect highest scorer
+    winner = candidates
+        .iter()
+        .max_by(|c| c.election_score)
+        .expect("At least one candidate required")
+    
+    return winner.node
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MARKET MAKING
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene Order {
+    exegesis {
+        An order in the resource market order book.
+    }
+    
+    has price: Credits
+    has quantity: UInt64
+    has node: NodeId
+    has timestamp: Timestamp
+}
+
+gene OrderBook {
+    exegesis {
+        Order book for resource trading at a nexus node.
+        Nexus nodes act as market makers with bid/ask spreads.
+    }
+    
+    has resource: ResourceType
+    has bids: List<Order>    // Sorted by price descending
+    has asks: List<Order>    // Sorted by price ascending
+    
+    fun best_bid() -> Option<Credits> {
+        this.bids.first().map(|o| o.price)
+    }
+    
+    fun best_ask() -> Option<Credits> {
+        this.asks.first().map(|o| o.price)
+    }
+    
+    fun total_inventory() -> UInt64 {
+        this.asks.iter().map(|o| o.quantity).sum()
+    }
+    
+    fun recent_prices(window: Duration) -> List<Credits> {
+        cutoff = now() - window
+        // Implementation: gather prices from recent trades
+        get_recent_trade_prices(this.resource, cutoff)
+    }
+}
+
+gene MarketMakerConfig {
+    exegesis {
+        Configuration for market maker spread calculation.
+    }
+    
+    has minimum_spread: Float64         // e.g., 0.01 = 1%
+    has volatility_factor: Float64
+    has inventory_factor: Float64
+    has entropy_spread_factor: Float64
+    has target_inventory: UInt64
+    
+    provides default() -> Self {
+        MarketMakerConfig {
+            minimum_spread: MINIMUM_SPREAD,
+            volatility_factor: VOLATILITY_FACTOR,
+            inventory_factor: INVENTORY_FACTOR,
+            entropy_spread_factor: ENTROPY_SPREAD_FACTOR,
+            target_inventory: 1000
+        }
+    }
+}
+
+fun calculate_spread(
+    order_book: OrderBook,
+    config: MarketMakerConfig,
+    local_entropy: Float64
+) -> Float64 {
+    exegesis {
+        Calculate the bid/ask spread for market making.
+        
+        Formula:
+        spread = base_spread 
+               + volatility * volatility_factor
+               + inventory_imbalance * inventory_factor
+               + entropy * entropy_spread_factor
+               
+        Nexus earns: spread_revenue = volume * spread / 2
+    }
+    
+    // Base spread
+    spread = config.minimum_spread
+    
+    // Volatility adjustment
+    price_history = order_book.recent_prices(Duration::hours(1))
+    if price_history.len() > 1 {
+        mean_price = price_history.iter().map(|p| p.amount).sum() as Float64 
+                     / price_history.len() as Float64
+        variance = price_history.iter()
+            .map(|p| (p.amount as Float64 - mean_price).pow(2))
+            .sum() / price_history.len() as Float64
+        volatility = variance.sqrt() / mean_price
+        spread = spread + volatility * config.volatility_factor
+    }
+    
+    // Inventory adjustment
+    current_inventory = order_book.total_inventory()
+    inventory_imbalance = abs(current_inventory as Int64 - config.target_inventory as Int64) as Float64 
+                          / config.target_inventory as Float64
+    spread = spread + inventory_imbalance * config.inventory_factor
+    
+    // Entropy adjustment
+    spread = spread + local_entropy * config.entropy_spread_factor
+    
+    return spread
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NEXUS MANAGER IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+system StandardNexusManager {
+    exegesis {
+        Standard implementation of the NexusManager trait.
+    }
+    
+    state topology: Map<NodeId, NexusTopology>
+    state regions: Map<String, Region>
+    state order_books: Map<ResourceType, OrderBook>
+    
+    impl NexusManager {
+        is get_role(node: NodeId) -> NexusRole {
+            topo = this.topology.get(node)
+            if topo.is_some() {
+                return topo.unwrap().role
+            }
+            
+            // Default to leaf
+            return NexusRole {
+                role_type: NexusRoleType::Leaf,
+                parent: find_nearest_nexus(node),
+                children: []
+            }
+        }
+        
+        is elect_nexus(region: Region) -> NodeId {
+            winner = elect_nexus(region)
+            
+            // Update topology
+            this.topology.insert(winner, NexusTopology {
+                node: winner,
+                role: NexusRole {
+                    role_type: NexusRoleType::Nexus,
+                    parent: find_nearest_poteau_mitan(winner),
+                    children: region.nodes.filter(|n| n != winner)
+                },
+                aggregated_gradient: ResourceGradient::zero(),
+                leaf_count: region.nodes.len() as UInt32 - 1,
+                last_election: now()
+            })
+            
+            // Update leaves to point to new nexus
+            for node in region.nodes {
+                if node != winner {
+                    this.topology.insert(node, NexusTopology {
+                        node: node,
+                        role: NexusRole {
+                            role_type: NexusRoleType::Leaf,
+                            parent: Some(winner),
+                            children: []
+                        },
+                        aggregated_gradient: ResourceGradient::zero(),
+                        leaf_count: 0,
+                        last_election: now()
+                    })
+                }
+            }
+            
+            return winner
+        }
+        
+        is aggregate_gradients(reports: List<LeafGradientReport>) -> ResourceGradient {
+            return aggregate_gradients(reports)
+        }
+        
+        is route_message(from: NodeId, to: NodeId) -> GossipPath {
+            from_role = this.get_role(from)
+            entropy_budget = 5.0  // Default budget
+            return determine_gossip_path(from, to, from_role, entropy_budget)
+        }
+    }
+}

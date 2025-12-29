@@ -1,0 +1,528 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ENR Core Types - Design Ontology Language Specification
+// File: specifications/enr/core.dol
+// Version: 0.1.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+module enr.core @ 0.1.0
+
+exegesis {
+    Entropy-Nexus-Revival (ENR) is the foundational economic primitive
+    for the VUDO OS distributed computing platform. This module defines
+    the core types and contracts.
+    
+    ENR is inspired by biological mycelial networks:
+    - Entropy: Thermodynamic cost of disorder in transactions
+    - Nexus: Hub-based aggregation and market-making
+    - Revival: Resource cycling and decomposition
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IDENTITY TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene NodeId {
+    exegesis {
+        Unique identifier for a node in the network.
+        Based on Ed25519 public key.
+    }
+    
+    has value: String
+    
+    constraint valid_format {
+        this.value.len() == 64
+    }
+}
+
+gene AccountId {
+    exegesis {
+        Account identifier for credit transactions.
+    }
+    
+    has node: NodeId
+    has account_type: AccountType
+}
+
+gene AccountType {
+    type: enum {
+        Node,           // Regular node account
+        RevivalPool,    // System revival pool
+        Treasury        // Network treasury
+    }
+}
+
+gene Timestamp {
+    exegesis {
+        Unix timestamp in milliseconds.
+    }
+    
+    has millis: UInt64
+    
+    provides now() -> Self {
+        // Runtime provided
+        Timestamp { millis: runtime_now_millis() }
+    }
+}
+
+gene Duration {
+    exegesis {
+        Time duration in milliseconds.
+    }
+    
+    has millis: UInt64
+    
+    provides seconds(s: UInt64) -> Self {
+        Duration { millis: s * 1000 }
+    }
+    
+    provides minutes(m: UInt64) -> Self {
+        Duration { millis: m * 60 * 1000 }
+    }
+    
+    provides hours(h: UInt64) -> Self {
+        Duration { millis: h * 60 * 60 * 1000 }
+    }
+    
+    provides days(d: UInt64) -> Self {
+        Duration { millis: d * 24 * 60 * 60 * 1000 }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CREDITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene Credits {
+    exegesis {
+        The fundamental unit of value in the ENR system.
+        Credits are conserved: they can only be transferred, not created 
+        or destroyed except through controlled mint/burn operations.
+    }
+    
+    has amount: UInt64
+    
+    constraint non_negative {
+        this.amount >= 0
+    }
+    
+    provides zero() -> Self {
+        Credits { amount: 0 }
+    }
+    
+    provides add(a: Credits, b: Credits) -> Credits {
+        Credits { amount: a.amount + b.amount }
+    }
+    
+    provides sub(a: Credits, b: Credits) -> Option<Credits> {
+        if a.amount >= b.amount {
+            Some(Credits { amount: a.amount - b.amount })
+        } else {
+            None
+        }
+    }
+}
+
+gene CreditTransfer {
+    exegesis {
+        A transfer of credits between accounts.
+        Transfers are atomic and conserve total credits.
+    }
+    
+    has from: AccountId
+    has to: AccountId
+    has amount: Credits
+    has entropy_cost: Credits
+    has timestamp: Timestamp
+    
+    constraint conservation {
+        // Total credits before == total credits after
+        // Enforced at runtime by ledger
+        true
+    }
+}
+
+gene CreditReservation {
+    exegesis {
+        A reservation of credits for a pending transaction.
+        Reservations expire if not consumed within TTL.
+    }
+    
+    has id: UInt64
+    has account: AccountId
+    has amount: Credits
+    has created_at: Timestamp
+    has ttl: Duration
+    has consumed: Bool
+    
+    constraint valid_ttl {
+        this.ttl.millis > 0
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTROPY
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene EntropyAccount {
+    exegesis {
+        Tracks entropy across four dimensions for a transaction or path.
+        Entropy represents the thermodynamic cost of disorder in the system.
+        
+        Formula: S_total = wₙ·Sₙ + wᶜ·Sᶜ + wˢ·Sˢ + wᵗ·Sᵗ
+        
+        Where:
+        - Sₙ = Network entropy (hops, latency, loss)
+        - Sᶜ = Compute entropy (CPU, memory churn)
+        - Sˢ = Storage entropy (size, fragmentation)
+        - Sᵗ = Temporal entropy (staleness, drift)
+    }
+    
+    has network: Float64
+    has compute: Float64
+    has storage: Float64
+    has temporal: Float64
+    
+    constraint bounded {
+        this.network >= 0.0 and this.network <= 10.0 and
+        this.compute >= 0.0 and this.compute <= 10.0 and
+        this.storage >= 0.0 and this.storage <= 10.0 and
+        this.temporal >= 0.0 and this.temporal <= 10.0
+    }
+    
+    provides zero() -> Self {
+        EntropyAccount {
+            network: 0.0,
+            compute: 0.0,
+            storage: 0.0,
+            temporal: 0.0
+        }
+    }
+}
+
+gene EntropyWeights {
+    exegesis {
+        Weights for combining entropy components.
+        Must sum to 1.0.
+    }
+    
+    has network_weight: Float64
+    has compute_weight: Float64
+    has storage_weight: Float64
+    has temporal_weight: Float64
+    
+    constraint weights_sum_to_one {
+        abs(this.network_weight + this.compute_weight + 
+            this.storage_weight + this.temporal_weight - 1.0) < 0.001
+    }
+    
+    provides default() -> Self {
+        EntropyWeights {
+            network_weight: 0.3,
+            compute_weight: 0.3,
+            storage_weight: 0.2,
+            temporal_weight: 0.2
+        }
+    }
+}
+
+trait EntropyCalculator {
+    exegesis {
+        Calculates entropy for transactions.
+    }
+    
+    is calculate(tx: Transaction) -> EntropyAccount
+    is weighted_sum(account: EntropyAccount, weights: EntropyWeights) -> Float64
+    is price_multiplier(account: EntropyAccount) -> Float64
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NEXUS TOPOLOGY
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene NexusRole {
+    exegesis {
+        Role of a node in the nexus hierarchy.
+        
+        Hierarchy:
+        - Leaf: Regular node, routes through nexus
+        - Nexus: Hub node, aggregates leaves (5-50)
+        - PoteauMitan: Super-nexus, global view
+    }
+    
+    has role_type: NexusRoleType
+    has parent: Option<NodeId>
+    has children: List<NodeId>
+}
+
+gene NexusRoleType {
+    type: enum {
+        Leaf,           // Regular node
+        Nexus,          // Hub node
+        PoteauMitan     // Super-nexus (central pillar)
+    }
+}
+
+gene ResourceType {
+    type: enum {
+        Cpu,
+        Memory,
+        Gpu,
+        Storage,
+        Bandwidth
+    }
+}
+
+gene ResourceGradient {
+    exegesis {
+        Vector of resource availability signals.
+        Used for market-based resource routing.
+    }
+    
+    has cpu_available: Float64
+    has memory_available: Float64
+    has gpu_available: Float64
+    has storage_available: Float64
+    has bandwidth_available: Float64
+    has credit_balance: Float64
+    
+    constraint normalized {
+        this.cpu_available >= 0.0 and this.cpu_available <= 1.0 and
+        this.memory_available >= 0.0 and this.memory_available <= 1.0 and
+        this.gpu_available >= 0.0 and this.gpu_available <= 1.0 and
+        this.storage_available >= 0.0 and this.storage_available <= 1.0 and
+        this.bandwidth_available >= 0.0 and this.bandwidth_available <= 1.0
+    }
+    
+    provides zero() -> Self {
+        ResourceGradient {
+            cpu_available: 0.0,
+            memory_available: 0.0,
+            gpu_available: 0.0,
+            storage_available: 0.0,
+            bandwidth_available: 0.0,
+            credit_balance: 0.0
+        }
+    }
+}
+
+gene NexusTopology {
+    exegesis {
+        Topology information for a nexus node.
+    }
+    
+    has node: NodeId
+    has role: NexusRole
+    has aggregated_gradient: ResourceGradient
+    has leaf_count: UInt32
+    has last_election: Timestamp
+}
+
+trait NexusManager {
+    exegesis {
+        Manages nexus topology and elections.
+    }
+    
+    is get_role(node: NodeId) -> NexusRole
+    is elect_nexus(region: Region) -> NodeId
+    is aggregate_gradients(reports: List<GradientReport>) -> ResourceGradient
+    is route_message(from: NodeId, to: NodeId) -> GossipPath
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REVIVAL POOL
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene RevivalPool {
+    exegesis {
+        Pool of recycled credits from failures and entropy tax.
+        Redistributed periodically to maintain network health.
+        
+        Allocation:
+        - 40% Network maintenance (nexus rewards)
+        - 25% New node subsidy
+        - 20% Low-balance support
+        - 15% Reserve buffer
+    }
+    
+    has recycled_credits: Credits
+    has entropy_tax_collected: Credits
+    has maintenance_fund: Credits
+    has reserve_buffer: Credits
+    
+    constraint non_negative {
+        this.recycled_credits.amount >= 0 and
+        this.entropy_tax_collected.amount >= 0 and
+        this.maintenance_fund.amount >= 0 and
+        this.reserve_buffer.amount >= 0
+    }
+}
+
+gene RevivalEventType {
+    type: enum {
+        NodeFailure,        // Node became unreachable
+        ReservationExpired, // Reservation timed out
+        GarbageCollected,   // Orphaned state cleaned up
+        EntropyTax,         // Tax deducted from transaction
+        SeptalIsolation,    // Node isolated by circuit breaker
+        VoluntaryExit       // Node gracefully left network
+    }
+}
+
+gene RevivalEvent {
+    exegesis {
+        An event that triggers credit recycling into the revival pool.
+    }
+    
+    has event_type: RevivalEventType
+    has source: NodeId
+    has credits: Credits
+    has timestamp: Timestamp
+    has metadata: Map<String, String>
+}
+
+trait RevivalManager {
+    exegesis {
+        Manages the revival pool and credit redistribution.
+    }
+    
+    is process_event(event: RevivalEvent) -> Result<Void, Error>
+    is redistribute(interval: Duration) -> List<CreditTransfer>
+    is decompose_node(node: NodeId) -> List<RevivalEvent>
+    is total_pool_balance() -> Credits
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEPTAL GATE (Circuit Breaker)
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene SeptalGateState {
+    type: enum {
+        Open,       // Normal operation
+        HalfOpen,   // Testing recovery
+        Closed      // Isolated (Woronin active)
+    }
+}
+
+gene SeptalGate {
+    exegesis {
+        Circuit breaker that isolates failing nodes.
+        Named after the septal pores in fungal hyphae that can be plugged
+        by Woronin bodies to prevent damage from spreading.
+        
+        State machine:
+        - Open → Closed: Failure threshold exceeded
+        - Closed → HalfOpen: Recovery timeout elapsed
+        - HalfOpen → Open: Recovery test passed
+        - HalfOpen → Closed: Recovery test failed
+    }
+    
+    has node: NodeId
+    has state: SeptalGateState
+    has failure_count: UInt32
+    has last_failure: Option<Timestamp>
+    has isolation_start: Option<Timestamp>
+}
+
+gene SeptalGateConfig {
+    exegesis {
+        Configuration for circuit breaker triggers.
+    }
+    
+    has timeout_weight: Float64
+    has timeout_threshold: Duration
+    has credit_default_weight: Float64
+    has credit_default_threshold: Credits
+    has reputation_weight: Float64
+    has reputation_threshold: Float64
+    
+    constraint weights_sum {
+        abs(this.timeout_weight + this.credit_default_weight + 
+            this.reputation_weight - 1.0) < 0.001
+    }
+    
+    provides default() -> Self {
+        SeptalGateConfig {
+            timeout_weight: 0.4,
+            timeout_threshold: Duration::seconds(30),
+            credit_default_weight: 0.3,
+            credit_default_threshold: Credits { amount: 100 },
+            reputation_weight: 0.3,
+            reputation_threshold: 0.5
+        }
+    }
+}
+
+gene HealthStatus {
+    has is_healthy: Bool
+    has timeout_score: Float64
+    has credit_score: Float64
+    has reputation_score: Float64
+    has last_check: Timestamp
+}
+
+trait SeptalGateManager {
+    exegesis {
+        Manages circuit breakers for all connections.
+    }
+    
+    is check_health(node: NodeId) -> HealthStatus
+    is should_isolate(node: NodeId, config: SeptalGateConfig) -> Bool
+    is isolate(node: NodeId) -> Result<Void, Error>
+    is attempt_recovery(node: NodeId) -> Result<Bool, Error>
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CORE INVARIANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+constraint CreditConservation {
+    exegesis {
+        Total credits in the system must be conserved.
+        Credits cannot be created or destroyed except through mint/burn.
+    }
+    
+    law conservation() {
+        sum(all_credits) == GENESIS_AMOUNT + minted - burned
+    }
+}
+
+constraint EntropyNonNegative {
+    exegesis {
+        Every transaction adds some disorder to the system.
+    }
+    
+    law non_negative(tx: Transaction) {
+        entropy(tx) >= 0.0
+    }
+}
+
+constraint RevivalCompleteness {
+    exegesis {
+        No resources are permanently lost.
+    }
+    
+    law eventually_recycled(resource: FailedResource) {
+        eventually(recycled(resource))
+    }
+}
+
+constraint NexusConsistency {
+    exegesis {
+        Nexus nodes have at least as much information as their leaves.
+    }
+    
+    law superset_view(nexus: NexusNode) {
+        forall leaf in nexus.leaves:
+            nexus.view >= leaf.view
+    }
+}
+
+constraint SeptalSafety {
+    exegesis {
+        Isolated nodes cannot participate in credit transactions.
+    }
+    
+    law no_credit_flow(node: NodeId) {
+        isolated(node) implies no_credit_flow(node)
+    }
+}

@@ -1,0 +1,404 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ENR Entropy Calculation - Design Ontology Language Specification
+// File: specifications/enr/entropy.dol
+// Version: 0.1.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+module enr.entropy @ 0.1.0
+
+use enr.core.{ EntropyAccount, EntropyWeights, EntropyCalculator, Transaction }
+
+exegesis {
+    Entropy calculation implementation for the ENR system.
+    Entropy quantifies the thermodynamic cost of disorder in transactions.
+    
+    Four entropy categories:
+    - Network (Sₙ): Path characteristics
+    - Compute (Sᶜ): Resource usage
+    - Storage (Sˢ): Data characteristics  
+    - Temporal (Sᵗ): Time-related factors
+    
+    Total entropy: S_total = wₙ·Sₙ + wᶜ·Sᶜ + wˢ·Sˢ + wᵗ·Sᵗ
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS - ENTROPY FACTORS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Network entropy factors (α coefficients)
+const HOP_ENTROPY_BASE: Float64 = 0.1           // α₁
+const LATENCY_ENTROPY_FACTOR: Float64 = 0.01    // α₂
+const LOSS_ENTROPY_FACTOR: Float64 = 5.0        // α₃
+const SATURATION_ENTROPY_FACTOR: Float64 = 2.0  // α₄
+
+// Compute entropy factors (β coefficients)
+const CYCLE_ENTROPY_FACTOR: Float64 = 0.000001      // β₁
+const MEMORY_ENTROPY_FACTOR: Float64 = 0.0000001    // β₂
+const CONTEXT_SWITCH_FACTOR: Float64 = 0.01         // β₃
+const CACHE_MISS_FACTOR: Float64 = 1.0              // β₄
+
+// Storage entropy factors (γ coefficients)
+const SIZE_ENTROPY_FACTOR: Float64 = 0.00000001     // γ₁
+const REPLICA_DIVERGENCE_FACTOR: Float64 = 3.0      // γ₂
+const FRAGMENTATION_FACTOR: Float64 = 2.0           // γ₃
+const COMPACTION_DEBT_FACTOR: Float64 = 1.5         // γ₄
+
+// Temporal entropy factors (δ coefficients)
+const STALENESS_ENTROPY_FACTOR: Float64 = 0.001     // δ₁
+const CLOCK_DRIFT_FACTOR: Float64 = 0.001           // δ₂
+const ORDERING_UNCERTAINTY_FACTOR: Float64 = 2.0    // δ₃
+const VERSION_DIVERGENCE_FACTOR: Float64 = 2.5      // δ₄
+
+// Maximum entropy bounds
+const MAX_NETWORK_ENTROPY: Float64 = 10.0
+const MAX_COMPUTE_ENTROPY: Float64 = 10.0
+const MAX_STORAGE_ENTROPY: Float64 = 10.0
+const MAX_TEMPORAL_ENTROPY: Float64 = 10.0
+
+// Price multiplier thresholds
+const LOW_ENTROPY_THRESHOLD: Float64 = 2.0
+const MED_ENTROPY_THRESHOLD: Float64 = 5.0
+const HIGH_ENTROPY_THRESHOLD: Float64 = 8.0
+const MAX_ENTROPY_MULTIPLIER: Float64 = 5.0
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NETWORK ENTROPY
+// Formula: Sₙ = α₁·hops + α₂·latency_var + α₃·loss_prob + α₄·saturation
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene NetworkEntropyInput {
+    exegesis {
+        Input parameters for network entropy calculation.
+    }
+    
+    has hops: UInt32                    // Number of network hops
+    has latency_variance_ms: Float64    // Latency jitter in milliseconds
+    has packet_loss_probability: Float64 // Probability of packet loss [0, 1]
+    has bandwidth_saturation: Float64   // Bandwidth utilization [0, 1]
+    
+    constraint valid_ranges {
+        this.packet_loss_probability >= 0.0 and 
+        this.packet_loss_probability <= 1.0 and
+        this.bandwidth_saturation >= 0.0 and 
+        this.bandwidth_saturation <= 1.0
+    }
+}
+
+fun calculate_network_entropy(input: NetworkEntropyInput) -> Float64 {
+    exegesis {
+        Calculate network entropy from path characteristics.
+        
+        Formula: Sₙ = α₁·hops + α₂·latency_var + α₃·loss_prob + α₄·saturation
+        
+        Where:
+        - α₁ = 0.1 (hop base cost)
+        - α₂ = 0.01 (latency variance factor)
+        - α₃ = 5.0 (packet loss factor)
+        - α₄ = 2.0 (saturation factor)
+    }
+    
+    // Sₙ = α₁·hops + α₂·latency_var + α₃·loss_prob + α₄·saturation
+    entropy = input.hops as Float64 * HOP_ENTROPY_BASE
+    entropy = entropy + input.latency_variance_ms * LATENCY_ENTROPY_FACTOR
+    entropy = entropy + input.packet_loss_probability * LOSS_ENTROPY_FACTOR
+    entropy = entropy + input.bandwidth_saturation * SATURATION_ENTROPY_FACTOR
+    
+    return min(entropy, MAX_NETWORK_ENTROPY)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPUTE ENTROPY
+// Formula: Sᶜ = β₁·cpu_cycles + β₂·mem + β₃·ctx_switches + β₄·cache_miss
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene ComputeEntropyInput {
+    exegesis {
+        Input parameters for compute entropy calculation.
+    }
+    
+    has cpu_cycles: UInt64          // CPU cycles consumed
+    has memory_bytes: UInt64        // Memory allocation in bytes
+    has context_switches: UInt32    // Context switch count
+    has cache_miss_rate: Float64    // Cache miss ratio [0, 1]
+    
+    constraint valid_range {
+        this.cache_miss_rate >= 0.0 and this.cache_miss_rate <= 1.0
+    }
+}
+
+fun calculate_compute_entropy(input: ComputeEntropyInput) -> Float64 {
+    exegesis {
+        Calculate compute entropy from resource usage.
+        
+        Formula: Sᶜ = β₁·cpu_cycles + β₂·mem + β₃·ctx_switches + β₄·cache_miss
+        
+        Where:
+        - β₁ = 0.000001 (cycle factor)
+        - β₂ = 0.0000001 (memory factor)
+        - β₃ = 0.01 (context switch factor)
+        - β₄ = 1.0 (cache miss factor)
+    }
+    
+    // Sᶜ = β₁·cpu_cycles + β₂·mem + β₃·ctx_switches + β₄·cache_miss
+    entropy = input.cpu_cycles as Float64 * CYCLE_ENTROPY_FACTOR
+    entropy = entropy + input.memory_bytes as Float64 * MEMORY_ENTROPY_FACTOR
+    entropy = entropy + input.context_switches as Float64 * CONTEXT_SWITCH_FACTOR
+    entropy = entropy + input.cache_miss_rate * CACHE_MISS_FACTOR
+    
+    return min(entropy, MAX_COMPUTE_ENTROPY)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STORAGE ENTROPY
+// Formula: Sˢ = γ₁·size + γ₂·replica_div + γ₃·fragmentation + γ₄·debt
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene StorageEntropyInput {
+    exegesis {
+        Input parameters for storage entropy calculation.
+    }
+    
+    has size_bytes: UInt64              // Data size in bytes
+    has replica_divergence: Float64     // 0.0 = perfect sync, 1.0 = fully diverged
+    has fragmentation_ratio: Float64    // 0.0 = contiguous, 1.0 = fully fragmented
+    has compaction_debt: Float64        // Pending compaction work [0, 10]
+    
+    constraint valid_ranges {
+        this.replica_divergence >= 0.0 and this.replica_divergence <= 1.0 and
+        this.fragmentation_ratio >= 0.0 and this.fragmentation_ratio <= 1.0 and
+        this.compaction_debt >= 0.0
+    }
+    
+    provides zero() -> Self {
+        StorageEntropyInput {
+            size_bytes: 0,
+            replica_divergence: 0.0,
+            fragmentation_ratio: 0.0,
+            compaction_debt: 0.0
+        }
+    }
+}
+
+fun calculate_storage_entropy(input: StorageEntropyInput) -> Float64 {
+    exegesis {
+        Calculate storage entropy from data characteristics.
+        
+        Formula: Sˢ = γ₁·size + γ₂·replica_div + γ₃·fragmentation + γ₄·debt
+        
+        Where:
+        - γ₁ = 0.00000001 (size factor)
+        - γ₂ = 3.0 (replica divergence factor)
+        - γ₃ = 2.0 (fragmentation factor)
+        - γ₄ = 1.5 (compaction debt factor)
+    }
+    
+    // Sˢ = γ₁·size + γ₂·replica_div + γ₃·fragmentation + γ₄·debt
+    entropy = input.size_bytes as Float64 * SIZE_ENTROPY_FACTOR
+    entropy = entropy + input.replica_divergence * REPLICA_DIVERGENCE_FACTOR
+    entropy = entropy + input.fragmentation_ratio * FRAGMENTATION_FACTOR
+    entropy = entropy + input.compaction_debt * COMPACTION_DEBT_FACTOR
+    
+    return min(entropy, MAX_STORAGE_ENTROPY)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEMPORAL ENTROPY
+// Formula: Sᵗ = δ₁·staleness + δ₂·clock_drift + δ₃·ordering + δ₄·version_div
+// ═══════════════════════════════════════════════════════════════════════════
+
+gene TemporalEntropyInput {
+    exegesis {
+        Input parameters for temporal entropy calculation.
+    }
+    
+    has staleness_seconds: Float64      // Time since last update
+    has clock_drift_ms: Float64         // Clock drift in milliseconds
+    has ordering_uncertainty: Float64   // 0.0 = certain, 1.0 = uncertain
+    has version_divergence: Float64     // Vector clock divergence [0, 10]
+    
+    constraint valid_ranges {
+        this.staleness_seconds >= 0.0 and
+        this.clock_drift_ms >= 0.0 and
+        this.ordering_uncertainty >= 0.0 and this.ordering_uncertainty <= 1.0
+    }
+    
+    provides zero() -> Self {
+        TemporalEntropyInput {
+            staleness_seconds: 0.0,
+            clock_drift_ms: 0.0,
+            ordering_uncertainty: 0.0,
+            version_divergence: 0.0
+        }
+    }
+}
+
+fun calculate_temporal_entropy(input: TemporalEntropyInput) -> Float64 {
+    exegesis {
+        Calculate temporal entropy from time-related factors.
+        
+        Formula: Sᵗ = δ₁·staleness + δ₂·clock_drift + δ₃·ordering + δ₄·version_div
+        
+        Where:
+        - δ₁ = 0.001 (staleness factor)
+        - δ₂ = 0.001 (clock drift factor)
+        - δ₃ = 2.0 (ordering uncertainty factor)
+        - δ₄ = 2.5 (version divergence factor)
+    }
+    
+    // Sᵗ = δ₁·staleness + δ₂·clock_drift + δ₃·ordering + δ₄·version_div
+    entropy = input.staleness_seconds * STALENESS_ENTROPY_FACTOR
+    entropy = entropy + input.clock_drift_ms * CLOCK_DRIFT_FACTOR
+    entropy = entropy + input.ordering_uncertainty * ORDERING_UNCERTAINTY_FACTOR
+    entropy = entropy + input.version_divergence * VERSION_DIVERGENCE_FACTOR
+    
+    return min(entropy, MAX_TEMPORAL_ENTROPY)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMBINED ENTROPY CALCULATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+fun weighted_entropy_sum(
+    account: EntropyAccount, 
+    weights: EntropyWeights
+) -> Float64 {
+    exegesis {
+        Calculate weighted sum of all entropy components.
+        
+        Formula: S_total = wₙ·Sₙ + wᶜ·Sᶜ + wˢ·Sˢ + wᵗ·Sᵗ
+        
+        Default weights: wₙ=0.3, wᶜ=0.3, wˢ=0.2, wᵗ=0.2
+    }
+    
+    // S_total = wₙ·Sₙ + wᶜ·Sᶜ + wˢ·Sˢ + wᵗ·Sᵗ
+    return account.network * weights.network_weight +
+           account.compute * weights.compute_weight +
+           account.storage * weights.storage_weight +
+           account.temporal * weights.temporal_weight
+}
+
+fun entropy_price_multiplier(account: EntropyAccount) -> Float64 {
+    exegesis {
+        Calculate price multiplier based on total entropy.
+        Uses piecewise linear function with increasing slope for higher entropy.
+        
+        Multiplier ranges:
+        - [0, 2): 1.0 + total * 0.05
+        - [2, 5): 1.1 + (total - 2) * 0.1
+        - [5, 8): 1.4 + (total - 5) * 0.2
+        - [8, ∞): 2.0 + (total - 8) * 0.5
+        
+        Maximum multiplier: 5.0x
+    }
+    
+    total = weighted_entropy_sum(account, EntropyWeights::default())
+    
+    multiplier = if total < LOW_ENTROPY_THRESHOLD {
+        // Low entropy: gentle increase
+        1.0 + (total * 0.05)
+    } else if total < MED_ENTROPY_THRESHOLD {
+        // Medium entropy: moderate increase
+        1.1 + ((total - 2.0) * 0.1)
+    } else if total < HIGH_ENTROPY_THRESHOLD {
+        // High entropy: steeper increase
+        1.4 + ((total - 5.0) * 0.2)
+    } else {
+        // Very high entropy: aggressive increase
+        2.0 + ((total - 8.0) * 0.5)
+    }
+    
+    return min(multiplier, MAX_ENTROPY_MULTIPLIER)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRANSACTION ENTROPY ALGORITHM
+// ═══════════════════════════════════════════════════════════════════════════
+
+fun calculate_transaction_entropy(tx: Transaction) -> EntropyAccount {
+    exegesis {
+        Calculate total entropy for a transaction.
+        
+        Algorithm:
+        1. Calculate network entropy from path
+        2. Calculate compute entropy from resource estimates
+        3. Calculate storage entropy if storage involved
+        4. Calculate temporal entropy if state read
+        5. Return combined entropy account
+    }
+    
+    // Step 1: Network entropy
+    network_input = NetworkEntropyInput {
+        hops: tx.path.hop_count(),
+        latency_variance_ms: tx.path.latency_variance(),
+        packet_loss_probability: tx.path.loss_probability(),
+        bandwidth_saturation: tx.path.saturation()
+    }
+    network_entropy = calculate_network_entropy(network_input)
+    
+    // Step 2: Compute entropy
+    compute_input = ComputeEntropyInput {
+        cpu_cycles: tx.estimated_cycles(),
+        memory_bytes: tx.estimated_memory(),
+        context_switches: tx.estimated_context_switches(),
+        cache_miss_rate: tx.estimated_cache_miss_rate()
+    }
+    compute_entropy = calculate_compute_entropy(compute_input)
+    
+    // Step 3: Storage entropy (if applicable)
+    storage_entropy = if tx.involves_storage() {
+        storage_input = StorageEntropyInput {
+            size_bytes: tx.storage_size(),
+            replica_divergence: tx.replica_divergence(),
+            fragmentation_ratio: tx.fragmentation(),
+            compaction_debt: tx.compaction_debt()
+        }
+        calculate_storage_entropy(storage_input)
+    } else {
+        0.0
+    }
+    
+    // Step 4: Temporal entropy (if applicable)
+    temporal_entropy = if tx.reads_state() {
+        temporal_input = TemporalEntropyInput {
+            staleness_seconds: tx.state_staleness().as_seconds(),
+            clock_drift_ms: tx.clock_drift(),
+            ordering_uncertainty: tx.ordering_uncertainty(),
+            version_divergence: tx.version_divergence()
+        }
+        calculate_temporal_entropy(temporal_input)
+    } else {
+        0.0
+    }
+    
+    // Step 5: Combine into entropy account
+    return EntropyAccount {
+        network: network_entropy,
+        compute: compute_entropy,
+        storage: storage_entropy,
+        temporal: temporal_entropy
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTROPY CALCULATOR IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+system StandardEntropyCalculator {
+    exegesis {
+        Standard implementation of the EntropyCalculator trait.
+    }
+    
+    impl EntropyCalculator {
+        is calculate(tx: Transaction) -> EntropyAccount {
+            return calculate_transaction_entropy(tx)
+        }
+        
+        is weighted_sum(account: EntropyAccount, weights: EntropyWeights) -> Float64 {
+            return weighted_entropy_sum(account, weights)
+        }
+        
+        is price_multiplier(account: EntropyAccount) -> Float64 {
+            return entropy_price_multiplier(account)
+        }
+    }
+}

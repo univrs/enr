@@ -1,0 +1,699 @@
+# DOL Development Task File - Phases 3 & 4
+# Version: 0.5.0-planning
+# Created: December 28, 2025
+# Status: Active Planning
+
+name: dol-compilation-pipeline-and-hyphal-network
+version: "0.5.0"
+description: >
+  DOL v0.5.0+ development roadmap covering:
+  - Phase 3: Compilation Pipeline (MLIR → WASM)
+  - Phase 4: Hyphal Network ENR (P2P Spirit Distribution)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CURRENT STATE (v0.4.0 Baseline)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+baseline:
+  version: "0.4.0"
+  released: "2024-12-28"
+  crates_io: "https://crates.io/crates/dol"
+  
+  completed_milestones:
+    - name: "Self-hosting"
+      status: complete
+      description: "DOL compiler compiles itself"
+      
+    - name: "HIR Types"
+      status: complete
+      files:
+        - src/hir/types.rs (554 lines, 30+ types)
+        - src/hir/validate.rs (1403 lines)
+        
+    - name: "HIR Codegen"
+      status: complete
+      files:
+        - src/codegen/hir_rust.rs (762 lines)
+        
+    - name: "HIR Specification"
+      status: complete
+      files:
+        - docs/hir/HIR-SPECIFICATION.md (1054 lines)
+        
+  test_coverage:
+    lib_tests: 365
+    doc_tests: 50
+    hir_tests: 36
+    validation_tests: 15
+    total: 466
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 3: COMPILATION PIPELINE (v0.5.0 - v0.6.0)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_3:
+  name: "Compilation Pipeline"
+  target_versions: ["0.5.0", "0.5.1", "0.6.0"]
+  timeline: "Q1-Q2 2025"
+  
+  overview: >
+    Complete the compilation pipeline from DOL source to executable WASM.
+    Introduces MLIR dialect for DOL, enabling multi-target code generation.
+    
+  # ─────────────────────────────────────────────────────────────────────────────
+  # v0.5.0: MLIR Dialect Definition
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  v0_5_0:
+    name: "MLIR Foundation"
+    milestone: "MLIR Dialect + HIR→MLIR Lowering"
+    estimated_weeks: 6
+    
+    tasks:
+      - id: mlir-dialect
+        name: "DOL MLIR Dialect Definition"
+        status: pending
+        priority: critical
+        estimated_hours: 40
+        description: >
+          Define MLIR dialect for DOL with operations mapping to HIR nodes.
+        
+        deliverables:
+          - src/mlir/dialect.rs (DolDialect definition)
+          - src/mlir/ops.rs (DOL operations)
+          - src/mlir/types.rs (DOL type mappings)
+          - docs/mlir/DIALECT.md (dialect specification)
+          
+        mlir_types:
+          - "!dol.gene<T>" → Gene type
+          - "!dol.trait" → Trait interface
+          - "!dol.credits" → ENR credits
+          - "!dol.node_id" → Network identity
+          - "!dol.entropy" → Entropy account
+          
+        mlir_operations:
+          - "dol.gene.define" → Define gene
+          - "dol.gene.field" → Gene field access
+          - "dol.constraint.check" → Constraint validation
+          - "dol.credits.transfer" → Credit transfer
+          - "dol.entropy.calculate" → Entropy calculation
+          
+      - id: hir-to-mlir
+        name: "HIR to MLIR Lowering"
+        status: pending
+        priority: critical
+        estimated_hours: 60
+        depends_on: [mlir-dialect]
+        description: >
+          Implement lowering pass from HIR to MLIR dialect.
+          
+        deliverables:
+          - src/mlir/lower.rs (Lowering pass)
+          - src/mlir/patterns.rs (Rewrite patterns)
+          - tests/mlir_lowering_tests.rs
+          
+        lowering_rules:
+          HirModule: "builtin.module"
+          HirTypeDecl_Gene: "dol.gene.define"
+          HirTraitDecl: "dol.trait.define"
+          HirFunctionDecl: "func.func"
+          HirExpr_Binary: "arith.* / cmp.*"
+          HirExpr_Call: "func.call"
+          HirExpr_Match: "scf.if / scf.switch"
+          HirStmt_For: "scf.for"
+          HirStmt_While: "scf.while"
+          
+      - id: mlir-validation
+        name: "MLIR Validation Pass"
+        status: pending
+        priority: high
+        estimated_hours: 20
+        depends_on: [hir-to-mlir]
+        description: >
+          Validate MLIR output for correctness before emission.
+          
+        deliverables:
+          - src/mlir/validate.rs
+          - tests/mlir_validation_tests.rs
+          
+    success_criteria:
+      - "DOL HIR lowers to valid MLIR"
+      - "All 10 stdlib files produce MLIR output"
+      - "MLIR output passes mlir-opt verification"
+      - "Round-trip HIR→MLIR→HIR preserves semantics"
+      
+  # ─────────────────────────────────────────────────────────────────────────────
+  # v0.5.1: MLIR Optimizations
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  v0_5_1:
+    name: "MLIR Optimizations"
+    milestone: "Optimization passes for DOL MLIR"
+    estimated_weeks: 3
+    
+    tasks:
+      - id: mlir-canonicalization
+        name: "Canonicalization Patterns"
+        status: pending
+        priority: medium
+        estimated_hours: 24
+        description: >
+          Implement canonicalization patterns for DOL operations.
+          
+        patterns:
+          - Constant folding for entropy calculations
+          - Dead code elimination
+          - Common subexpression elimination
+          - Loop invariant code motion
+          
+      - id: mlir-inlining
+        name: "Function Inlining Pass"
+        status: pending
+        priority: medium
+        estimated_hours: 16
+        description: >
+          Inline small functions and constraint checks.
+          
+      - id: mlir-constraint-folding
+        name: "Constraint Folding"
+        status: pending
+        priority: medium
+        estimated_hours: 16
+        description: >
+          Fold statically-provable constraints at compile time.
+          
+  # ─────────────────────────────────────────────────────────────────────────────
+  # v0.6.0: WASM Emission
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  v0_6_0:
+    name: "WASM Backend"
+    milestone: "Full Spirit compilation from .dol to .wasm"
+    estimated_weeks: 8
+    
+    tasks:
+      - id: mlir-to-llvm
+        name: "MLIR to LLVM Lowering"
+        status: pending
+        priority: critical
+        estimated_hours: 40
+        description: >
+          Lower DOL MLIR dialect to LLVM dialect.
+          
+        deliverables:
+          - src/mlir/llvm_lower.rs
+          - Standard type mappings to LLVM types
+          
+      - id: wasm-emission
+        name: "WASM Code Emission"
+        status: pending
+        priority: critical
+        estimated_hours: 60
+        depends_on: [mlir-to-llvm]
+        description: >
+          Emit WASM binary from LLVM MLIR.
+          
+        deliverables:
+          - src/emit/wasm.rs
+          - src/emit/wasm_runtime.rs (runtime support)
+          - WASI bindings for I/O
+          
+      - id: spirit-packaging
+        name: "Spirit Package Format"
+        status: pending
+        priority: high
+        estimated_hours: 24
+        description: >
+          Define Spirit package format (.spirit) containing WASM + metadata.
+          
+        deliverables:
+          - src/spirit/package.rs
+          - src/spirit/manifest.rs
+          - docs/SPIRIT-FORMAT.md
+          
+        format:
+          extension: ".spirit"
+          contents:
+            - Spirit.dol (manifest)
+            - main.wasm (compiled code)
+            - types.json (type metadata)
+            - constraints.json (constraint definitions)
+            
+      - id: dol-build-command
+        name: "dol build Command"
+        status: pending
+        priority: high
+        estimated_hours: 16
+        depends_on: [wasm-emission, spirit-packaging]
+        description: >
+          Implement full build command for Spirit compilation.
+          
+        usage: |
+          dol build src/main.dol -o my-spirit.spirit
+          dol build --target wasm src/main.dol -o main.wasm
+          dol build --target rust src/main.dol -o generated/
+          
+    success_criteria:
+      - "dol build produces valid .wasm files"
+      - "WASM passes wasmtime validation"
+      - "Spirit packages loadable by VUDO runtime"
+      - "End-to-end: .dol → .spirit → execution"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 4: HYPHAL NETWORK ENR (v0.7.0+)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_4:
+  name: "Hyphal Network ENR"
+  target_versions: ["0.7.0", "0.8.0", "0.9.0", "1.0.0"]
+  timeline: "Q3-Q4 2025"
+  
+  overview: >
+    Implement Entropy-Nexus-Revival (ENR) economic layer and P2P network.
+    Enable Spirit distribution, cross-node execution, and mycelial economics.
+    
+  # ─────────────────────────────────────────────────────────────────────────────
+  # v0.7.0: ENR Foundation
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  v0_7_0:
+    name: "ENR Foundation"
+    milestone: "Core ENR types and entropy calculation"
+    estimated_weeks: 4
+    
+    dol_specifications:
+      - file: specifications/enr/core.dol
+        status: complete
+        types:
+          - Credits
+          - CreditTransfer
+          - EntropyAccount
+          - EntropyWeights
+          - NexusRole
+          - ResourceGradient
+          - RevivalPool
+          - SeptalGate
+          
+      - file: specifications/enr/entropy.dol
+        status: complete
+        functions:
+          - calculate_network_entropy
+          - calculate_compute_entropy
+          - calculate_storage_entropy
+          - calculate_temporal_entropy
+          - weighted_entropy_sum
+          - entropy_price_multiplier
+          
+      - file: specifications/enr/nexus.dol
+        status: complete
+        functions:
+          - determine_gossip_path
+          - aggregate_gradients
+          - elect_nexus
+          - calculate_spread
+          
+      - file: specifications/enr/revival.dol
+        status: complete
+        functions:
+          - decompose_failed_node
+          - plan_redistribution
+          - calculate_entropy_tax
+          
+      - file: specifications/enr/septal.dol
+        status: complete
+        functions:
+          - check_node_health
+          - should_isolate
+          - transition_gate
+          - activate_woronin
+          
+      - file: specifications/enr/pricing.dol
+        status: complete
+        systems:
+          - FixedRatePricing
+          - DynamicPricing
+          - AuctionPricing
+          - CompositePricing
+          
+    tasks:
+      - id: enr-crate
+        name: "Create univrs-enr Crate"
+        status: pending
+        priority: critical
+        estimated_hours: 80
+        description: >
+          Implement ENR core types in Rust, generated from DOL specs.
+          
+        structure:
+          - univrs-enr/src/lib.rs
+          - univrs-enr/src/core/types.rs
+          - univrs-enr/src/entropy/calculator.rs
+          - univrs-enr/src/nexus/topology.rs
+          - univrs-enr/src/revival/pool.rs
+          - univrs-enr/src/septal/gate.rs
+          - univrs-enr/src/pricing/mod.rs
+          
+      - id: entropy-calculator
+        name: "Entropy Calculator Implementation"
+        status: pending
+        priority: critical
+        estimated_hours: 24
+        depends_on: [enr-crate]
+        description: >
+          Implement entropy calculation per ENR specification.
+          
+        formulas:
+          network: "Sₙ = α₁·hops + α₂·latency_var + α₃·loss_prob + α₄·saturation"
+          compute: "Sᶜ = β₁·cpu_cycles + β₂·mem + β₃·ctx_switches + β₄·cache_miss"
+          storage: "Sˢ = γ₁·size + γ₂·replica_div + γ₃·fragmentation + γ₄·debt"
+          temporal: "Sᵗ = δ₁·staleness + δ₂·clock_drift + δ₃·ordering + δ₄·version_div"
+          total: "S_total = wₙ·Sₙ + wᶜ·Sᶜ + wˢ·Sˢ + wᵗ·Sᵗ"
+          
+      - id: enr-tests
+        name: "ENR Unit Tests"
+        status: pending
+        priority: high
+        estimated_hours: 24
+        depends_on: [entropy-calculator]
+        description: >
+          Comprehensive tests for all ENR calculations.
+          
+    success_criteria:
+      - "Entropy calculation accurate within 5% of expected"
+      - "All invariants verified (credit conservation, etc.)"
+      - "100% test coverage for core types"
+      
+  # ─────────────────────────────────────────────────────────────────────────────
+  # v0.8.0: P2P Network Layer
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  v0_8_0:
+    name: "P2P Network"
+    milestone: "Spirit distribution over P2P network"
+    estimated_weeks: 6
+    
+    tasks:
+      - id: gossip-protocol
+        name: "Gossip Protocol Implementation"
+        status: pending
+        priority: critical
+        estimated_hours: 60
+        description: >
+          Implement Chitchat-based gossip for gradient propagation.
+          
+        features:
+          - Node discovery
+          - Gradient gossip (10s intervals)
+          - Nexus election protocol
+          - Septal gate status broadcast
+          
+      - id: spirit-distribution
+        name: "Spirit P2P Distribution"
+        status: pending
+        priority: critical
+        estimated_hours: 40
+        depends_on: [gossip-protocol]
+        description: >
+          Enable Spirit package distribution across nodes.
+          
+        protocol:
+          - Spirit announcement (hash + metadata)
+          - Chunk-based transfer
+          - Verification and caching
+          - Content-addressed storage
+          
+      - id: nexus-topology
+        name: "Nexus Topology Management"
+        status: pending
+        priority: high
+        estimated_hours: 32
+        depends_on: [gossip-protocol]
+        description: >
+          Implement nexus election and topology management.
+          
+        features:
+          - Candidate scoring (uptime, bandwidth, reputation)
+          - Election protocol
+          - Leaf-to-nexus routing
+          - Gradient aggregation
+          
+    success_criteria:
+      - "Gradient gossip updates every 10 seconds"
+      - "Nexus election completes within 2 minutes"
+      - "Spirit transfer works across 10+ nodes"
+      
+  # ─────────────────────────────────────────────────────────────────────────────
+  # v0.9.0: Imaginarium Registry
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  v0_9_0:
+    name: "Imaginarium Registry"
+    milestone: "Distributed Spirit registry"
+    estimated_weeks: 6
+    
+    tasks:
+      - id: registry-protocol
+        name: "Registry Protocol"
+        status: pending
+        priority: high
+        estimated_hours: 48
+        description: >
+          Implement distributed registry for Spirit discovery.
+          
+        features:
+          - Spirit metadata storage
+          - Search by name, author, tags
+          - Version resolution
+          - Dependency graph
+          
+      - id: credit-ledger
+        name: "Credit Ledger"
+        status: pending
+        priority: critical
+        estimated_hours: 60
+        description: >
+          Implement distributed credit ledger with OpenRaft consensus.
+          
+        features:
+          - Credit balances
+          - Transfer verification
+          - Entropy tax collection
+          - Revival pool management
+          
+      - id: revival-pool
+        name: "Revival Pool Implementation"
+        status: pending
+        priority: high
+        estimated_hours: 32
+        depends_on: [credit-ledger]
+        description: >
+          Implement revival pool per ENR specification.
+          
+        allocation:
+          network_maintenance: 0.40
+          new_node_subsidy: 0.25
+          low_balance_support: 0.20
+          reserve_buffer: 0.15
+          
+    success_criteria:
+      - "Spirit discovery works across network"
+      - "Credit transfers complete in < 1 second"
+      - "Revival redistribution occurs hourly"
+      
+  # ─────────────────────────────────────────────────────────────────────────────
+  # v1.0.0: Production Ready
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  v1_0_0:
+    name: "Production Release"
+    milestone: "VUDO OS beta launch"
+    estimated_weeks: 8
+    
+    tasks:
+      - id: sandbox-migration
+        name: "Cross-Node Sandbox Migration"
+        status: pending
+        priority: high
+        estimated_hours: 60
+        description: >
+          Enable WASM sandbox state migration between nodes.
+          
+      - id: chaos-testing
+        name: "Chaos Testing Framework"
+        status: pending
+        priority: critical
+        estimated_hours: 40
+        description: >
+          Implement chaos testing per ENR specification.
+          
+        scenarios:
+          - Nexus failure
+          - Network partition
+          - Credit exhaustion
+          - Mass node join
+          - Cascade failure
+          - Byzantine behavior
+          
+      - id: production-hardening
+        name: "Production Hardening"
+        status: pending
+        priority: critical
+        estimated_hours: 80
+        description: >
+          Security audit, performance tuning, documentation.
+          
+    success_criteria:
+      - "All 6 chaos scenarios pass"
+      - "Network survives 30% node failure"
+      - "Transaction throughput > 1000/sec"
+      - "Complete API documentation"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENR DOL SPECIFICATION FILES (COMPLETED)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+enr_specifications:
+  location: "specifications/enr/"
+  status: complete
+  
+  files:
+    - name: core.dol
+      description: "Core ENR types: Credits, Entropy, Nexus, Revival, Septal"
+      lines: ~400
+      genes: 20
+      traits: 4
+      constraints: 5
+      
+    - name: entropy.dol
+      description: "Entropy calculation with all formulas"
+      lines: ~350
+      constants: 20
+      functions: 8
+      systems: 1
+      
+    - name: nexus.dol
+      description: "Nexus topology, election, market making"
+      lines: ~400
+      constants: 12
+      functions: 10
+      systems: 1
+      
+    - name: revival.dol
+      description: "Revival pool, decomposition, redistribution"
+      lines: ~350
+      constants: 10
+      functions: 6
+      systems: 1
+      
+    - name: septal.dol
+      description: "Circuit breaker, health checks, Woronin"
+      lines: ~350
+      constants: 5
+      functions: 8
+      systems: 1
+      
+    - name: pricing.dol
+      description: "Fixed, dynamic, auction pricing models"
+      lines: ~450
+      traits: 1
+      systems: 4
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEPENDENCIES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+dependencies:
+  external:
+    - name: "MLIR/LLVM"
+      version: "18.x"
+      purpose: "Multi-level IR compilation"
+      
+    - name: "wasmtime"
+      version: "latest"
+      purpose: "WASM runtime for testing"
+      
+    - name: "chitchat"
+      version: "latest"
+      purpose: "Gossip protocol"
+      
+    - name: "openraft"
+      version: "latest"
+      purpose: "Consensus for credit ledger"
+      
+    - name: "ed25519-dalek"
+      version: "latest"
+      purpose: "Node identity"
+      
+  internal:
+    - name: "dol"
+      version: "0.4.0"
+      purpose: "Base compiler"
+      
+    - name: "univrs-network"
+      version: "latest"
+      purpose: "P2P networking"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SUCCESS METRICS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+success_metrics:
+  phase_3:
+    - metric: "HIR to MLIR coverage"
+      target: "100% of HIR nodes"
+      
+    - metric: "WASM validation"
+      target: "All output passes wasmtime"
+      
+    - metric: "Compilation speed"
+      target: "< 5s for 1000 LOC"
+      
+  phase_4:
+    - metric: "Entropy accuracy"
+      target: "Within 5% of expected"
+      
+    - metric: "Nexus election time"
+      target: "< 2 minutes"
+      
+    - metric: "Gradient update latency"
+      target: "< 100ms"
+      
+    - metric: "Credit transaction throughput"
+      target: "> 1000/sec"
+      
+    - metric: "Network resilience"
+      target: "Survives 30% node failure"
+      
+    - metric: "Chaos scenarios"
+      target: "All 6 pass"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TIMELINE SUMMARY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+timeline:
+  "Q1 2025":
+    - "v0.5.0: MLIR Dialect + HIR→MLIR (6 weeks)"
+    - "v0.5.1: MLIR Optimizations (3 weeks)"
+    
+  "Q2 2025":
+    - "v0.6.0: WASM Backend + Spirit Packaging (8 weeks)"
+    
+  "Q3 2025":
+    - "v0.7.0: ENR Foundation (4 weeks)"
+    - "v0.8.0: P2P Network (6 weeks)"
+    
+  "Q4 2025":
+    - "v0.9.0: Imaginarium Registry (6 weeks)"
+    - "v1.0.0: Production Release (8 weeks)"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NOTES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+notes:
+  - "ENR DOL specifications are complete and ready for Rust implementation"
+  - "Phase 3 is prerequisite for Phase 4 (need WASM for Spirit execution)"
+  - "MLIR provides clean separation between front-end and back-end"
+  - "Chaos testing is critical before production deployment"
+  - "Consider parallel development of Phase 4a (ENR types) during Phase 3"
