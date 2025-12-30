@@ -65,6 +65,10 @@ pub mod septal;
 #[cfg(feature = "chaos-testing")]
 pub mod testing;
 
+/// Bridge module for gossipsub integration
+#[cfg(feature = "bridge")]
+pub mod bridge;
+
 // Re-export core types for convenience
 pub use core::{
     AccountId, AccountType, Credits, CreditReservation, CreditTransfer, Duration, EnrError,
