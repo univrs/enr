@@ -7,8 +7,6 @@
 
 > *"The network is not pipes. It is a living market."*
 
-# Univrs Identity
-
 > [!CAUTION]
 > This project is a research demonstrator. It is in early development and may change significantly. Using permissive Univrs tools in your repository requires careful attention to security considerations and careful human supervision, and even then things can still go wrong. Use it with caution, and at your own risk. See [Disclaimer](#disclaimer).
 
@@ -3440,14 +3438,15 @@ Week 8: WASM Integration
 1. Kiers, E.T., et al. "Reciprocal rewards stabilize cooperation in the mycorrhizal symbiosis." Science, 2011.
 2. Karst, J., et al. "Positive citation bias and overinterpreted results lead to misinformation on common mycorrhizal networks in forests." Nature Ecology & Evolution, 2023.
 3. Adamatzky, A. "Language of fungi derived from their electrical spiking activity." Royal Society Open Science, 2022.
-4. DOL v0.4.0 HIR Specification, Univrs, 2024.
+4. DOL v0.6.0 HIR Specification, Univrs, 2024.
 5. VUDO OS Vision Document, Univrs, 2024.
 
 ---
 
 ## Disclaimer
 
-> [!IMPORTANT] > **This is an experimental system. _We break things frequently_.**
+> [!IMPORTANT]
+> **This is an experimental system. _We break things frequently_.**
 
 - Not accepting contributions yet (but we plan to!)
 - No stability guarantees
