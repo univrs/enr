@@ -561,7 +561,7 @@ OUTPUT: Price multiplier ≥ 1.0
 │                          │                   │                              │
 │                          │ • Global gradient │                              │
 │                          │ • Full gossip     │                              │
-│                          │ • Price oracle    │                              │
+│                          │ • Price gia    │                              │
 │                          └─────────┬─────────┘                              │
 │                                    │                                        │
 │              ┌─────────────────────┼─────────────────────┐                  │
@@ -606,7 +606,7 @@ OUTPUT: Price multiplier ≥ 1.0
 │  POTEAU-MITAN:                                                              │
 │  • Full global gradient view                                                │
 │  • Participates in consensus (OpenRaft)                                     │
-│  • Price oracle for network-wide rates                                      │
+│  • Price gia for network-wide rates                                      │
 │  • Always uses direct routing                                               │
 │  • Requirements: high uptime, consensus participation                       │
 │                                                                             │
@@ -967,7 +967,7 @@ ENR provides the foundation; these pricing models consume ENR services:
 │  │                                                                     │   │
 │  │  ENR components used:                                               │   │
 │  │  • Entropy: Adds cost for high-entropy routes                       │   │
-│  │  • Nexus: Aggregates supply/demand signals, provides price oracle   │   │
+│  │  • Nexus: Aggregates supply/demand signals, provides price gia   │   │
 │  │  • Revival: Recycles credits, dampens price volatility              │   │
 │  │                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
