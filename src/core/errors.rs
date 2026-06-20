@@ -11,6 +11,9 @@ pub enum EnrError {
         available: Credits,
     },
 
+    #[error("Zero amount not allowed")]
+    ZeroAmount,
+
     #[error("Reservation not found: {0:?}")]
     ReservationNotFound(ReservationId),
 
