@@ -134,10 +134,18 @@ impl ReservationLedger {
     /// `commit`/`release` consume. No external side effects — this is the cheap
     /// local gate that must pass *before* any payment rail is touched.
     ///
+    /// `now` stamps the reservation's `created_at`, so expiry is driven by the
+    /// caller's clock (deterministic — no hidden wall-clock read).
+    ///
     /// # Errors
     /// - [`EnrError::ZeroAmount`] if `amount` is zero.
     /// - [`EnrError::InsufficientCredits`] if `spendable < amount`.
-    pub fn reserve(&mut self, amount: Credits, ttl: Duration) -> EnrResult<ReservationId> {
+    pub fn reserve(
+        &mut self,
+        amount: Credits,
+        ttl: Duration,
+        now: Timestamp,
+    ) -> EnrResult<ReservationId> {
         if amount.is_zero() {
             return Err(EnrError::ZeroAmount);
         }
@@ -156,7 +164,8 @@ impl ReservationLedger {
         let id = ReservationId::new(self.next_id);
         self.next_id += 1;
 
-        let reservation = CreditReservation::new(id, self.account.clone(), amount, ttl);
+        let mut reservation = CreditReservation::new(id, self.account.clone(), amount, ttl);
+        reservation.created_at = now;
         self.spendable = self.spendable.saturating_sub(amount);
         self.reservations.insert(id, LedgerEntry { reservation, state });
 
@@ -196,6 +205,30 @@ impl ReservationLedger {
 
         self.consumed = self.consumed.saturating_add(amount);
         self.reservations.remove(&id);
+        Ok(amount)
+    }
+
+    /// Debit `amount` directly from spendable, bypassing the reserve step.
+    ///
+    /// For outflows that need no escrow (e.g. an immediate, already-authorized
+    /// transfer). Moves credits straight `Active → Consumed`. Prefer
+    /// `reserve`/`commit` whenever the settlement can fail or race.
+    ///
+    /// # Errors
+    /// - [`EnrError::ZeroAmount`] if `amount` is zero.
+    /// - [`EnrError::InsufficientCredits`] if `spendable < amount`.
+    pub fn spend(&mut self, amount: Credits) -> EnrResult<Credits> {
+        if amount.is_zero() {
+            return Err(EnrError::ZeroAmount);
+        }
+        if self.spendable < amount {
+            return Err(EnrError::InsufficientCredits {
+                required: amount,
+                available: self.spendable,
+            });
+        }
+        self.spendable = self.spendable.saturating_sub(amount);
+        self.consumed = self.consumed.saturating_add(amount);
         Ok(amount)
     }
 
@@ -285,12 +318,16 @@ mod tests {
         Duration::seconds(60)
     }
 
+    fn t0() -> Timestamp {
+        Timestamp::new(1_000_000)
+    }
+
     #[test]
     fn reserve_decrements_spendable_and_conserves() {
         let mut l = ledger(100);
         assert!(l.conservation_holds());
 
-        let id = l.reserve(Credits::new(40), ttl()).unwrap();
+        let id = l.reserve(Credits::new(40), ttl(), t0()).unwrap();
         assert_eq!(l.balance(), Credits::new(60));
         assert_eq!(l.reserved_total(), Credits::new(40));
         assert!(l.get(id).is_some());
@@ -301,7 +338,7 @@ mod tests {
     fn reserve_rejects_zero() {
         let mut l = ledger(100);
         assert!(matches!(
-            l.reserve(Credits::ZERO, ttl()),
+            l.reserve(Credits::ZERO, ttl(), t0()),
             Err(EnrError::ZeroAmount)
         ));
     }
@@ -309,7 +346,7 @@ mod tests {
     #[test]
     fn reserve_rejects_insufficient_balance() {
         let mut l = ledger(50);
-        let r = l.reserve(Credits::new(80), ttl());
+        let r = l.reserve(Credits::new(80), ttl(), t0());
         assert!(matches!(
             r,
             Err(EnrError::InsufficientCredits { required, available })
@@ -324,8 +361,8 @@ mod tests {
     fn no_double_spend_toctou() {
         // The core guarantee: two reservations cannot both take from the same funds.
         let mut l = ledger(100);
-        let _first = l.reserve(Credits::new(60), ttl()).unwrap();
-        let second = l.reserve(Credits::new(60), ttl());
+        let _first = l.reserve(Credits::new(60), ttl(), t0()).unwrap();
+        let second = l.reserve(Credits::new(60), ttl(), t0());
         assert!(matches!(second, Err(EnrError::InsufficientCredits { .. })));
         assert_eq!(l.reserved_total(), Credits::new(60));
         assert!(l.conservation_holds());
@@ -334,8 +371,8 @@ mod tests {
     #[test]
     fn commit_moves_reserved_to_consumed() {
         let mut l = ledger(100);
-        let id = l.reserve(Credits::new(40), ttl()).unwrap();
-        let amount = l.commit(id, Timestamp::now()).unwrap();
+        let id = l.reserve(Credits::new(40), ttl(), t0()).unwrap();
+        let amount = l.commit(id, t0()).unwrap();
 
         assert_eq!(amount, Credits::new(40));
         assert_eq!(l.balance(), Credits::new(60));
@@ -349,7 +386,7 @@ mod tests {
     fn release_restores_spendable_round_trip() {
         let mut l = ledger(100);
         let before = l.balance();
-        let id = l.reserve(Credits::new(40), ttl()).unwrap();
+        let id = l.reserve(Credits::new(40), ttl(), t0()).unwrap();
         let amount = l.release(id).unwrap();
 
         assert_eq!(amount, Credits::new(40));
@@ -362,10 +399,10 @@ mod tests {
     #[test]
     fn double_commit_fails() {
         let mut l = ledger(100);
-        let id = l.reserve(Credits::new(40), ttl()).unwrap();
-        l.commit(id, Timestamp::now()).unwrap();
+        let id = l.reserve(Credits::new(40), ttl(), t0()).unwrap();
+        l.commit(id, t0()).unwrap();
         assert!(matches!(
-            l.commit(id, Timestamp::now()),
+            l.commit(id, t0()),
             Err(EnrError::ReservationNotFound(_))
         ));
     }
@@ -373,7 +410,7 @@ mod tests {
     #[test]
     fn double_release_fails() {
         let mut l = ledger(100);
-        let id = l.reserve(Credits::new(40), ttl()).unwrap();
+        let id = l.reserve(Credits::new(40), ttl(), t0()).unwrap();
         l.release(id).unwrap();
         assert!(matches!(
             l.release(id),
@@ -384,10 +421,10 @@ mod tests {
     #[test]
     fn commit_after_release_fails() {
         let mut l = ledger(100);
-        let id = l.reserve(Credits::new(40), ttl()).unwrap();
+        let id = l.reserve(Credits::new(40), ttl(), t0()).unwrap();
         l.release(id).unwrap();
         assert!(matches!(
-            l.commit(id, Timestamp::now()),
+            l.commit(id, t0()),
             Err(EnrError::ReservationNotFound(_))
         ));
     }
@@ -395,10 +432,10 @@ mod tests {
     #[test]
     fn expired_reservation_cannot_commit_and_is_reclaimed() {
         let mut l = ledger(100);
-        let id = l.reserve(Credits::new(40), Duration::seconds(10)).unwrap();
+        let id = l.reserve(Credits::new(40), Duration::seconds(10), t0()).unwrap();
 
         // Commit well after the ttl.
-        let later = Timestamp::new(l.get(id).unwrap().created_at.millis + 20_000);
+        let later = Timestamp::new(t0().millis + 20_000);
         assert!(matches!(
             l.commit(id, later),
             Err(EnrError::ReservationExpired(_))
@@ -413,11 +450,10 @@ mod tests {
     #[test]
     fn release_expired_reclaims_stranded_reservations() {
         let mut l = ledger(100);
-        let a = l.reserve(Credits::new(30), Duration::seconds(10)).unwrap();
-        let _b = l.reserve(Credits::new(20), Duration::hours(1)).unwrap();
+        let a = l.reserve(Credits::new(30), Duration::seconds(10), t0()).unwrap();
+        let _b = l.reserve(Credits::new(20), Duration::hours(1), t0()).unwrap();
 
-        let created = l.get(a).unwrap().created_at.millis;
-        let now = Timestamp::new(created + 20_000); // a expired, b still valid
+        let now = Timestamp::new(t0().millis + 20_000); // a expired, b still valid
 
         let reclaimed = l.release_expired(now);
         assert_eq!(reclaimed, vec![a]);
@@ -427,17 +463,39 @@ mod tests {
     }
 
     #[test]
+    fn spend_debits_directly_and_conserves() {
+        let mut l = ledger(100);
+        let amount = l.spend(Credits::new(30)).unwrap();
+        assert_eq!(amount, Credits::new(30));
+        assert_eq!(l.balance(), Credits::new(70));
+        assert_eq!(l.consumed_total(), Credits::new(30));
+        assert_eq!(l.reserved_total(), Credits::ZERO);
+        assert!(l.conservation_holds());
+    }
+
+    #[test]
+    fn spend_rejects_insufficient_and_zero() {
+        let mut l = ledger(20);
+        assert!(matches!(
+            l.spend(Credits::new(50)),
+            Err(EnrError::InsufficientCredits { .. })
+        ));
+        assert!(matches!(l.spend(Credits::ZERO), Err(EnrError::ZeroAmount)));
+        assert_eq!(l.balance(), Credits::new(20)); // untouched
+    }
+
+    #[test]
     fn conservation_holds_across_mixed_sequence() {
         let mut l = ledger(1000);
-        let a = l.reserve(Credits::new(100), ttl()).unwrap();
-        let b = l.reserve(Credits::new(250), ttl()).unwrap();
-        let c = l.reserve(Credits::new(50), ttl()).unwrap();
+        let a = l.reserve(Credits::new(100), ttl(), t0()).unwrap();
+        let b = l.reserve(Credits::new(250), ttl(), t0()).unwrap();
+        let c = l.reserve(Credits::new(50), ttl(), t0()).unwrap();
 
-        l.commit(a, Timestamp::now()).unwrap();
+        l.commit(a, t0()).unwrap();
         l.release(b).unwrap();
         l.fund(Credits::new(500));
-        let _d = l.reserve(Credits::new(75), ttl()).unwrap();
-        l.commit(c, Timestamp::now()).unwrap();
+        let _d = l.reserve(Credits::new(75), ttl(), t0()).unwrap();
+        l.commit(c, t0()).unwrap();
 
         // funded = 1500, consumed = 150, reserved = 75, spendable = 1275
         assert_eq!(l.funded_total(), Credits::new(1500));

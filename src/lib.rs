@@ -59,6 +59,7 @@ pub mod core;
 pub mod entropy;
 pub mod nexus;
 pub mod pricing;
+pub mod fiat;
 pub mod revival;
 pub mod septal;
 

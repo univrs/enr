@@ -49,7 +49,9 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-use crate::core::{Credits, NodeId, Timestamp};
+use crate::core::{
+    AccountId, Credits, EnrError, NodeId, ReservationId, ReservationLedger, Timestamp,
+};
 use crate::nexus::{ResourceGradient, TopologyManager};
 use crate::septal::{SeptalGate, SeptalGateConfig, SeptalGateState};
 
@@ -135,8 +137,8 @@ pub struct EnrBridge {
     gradients: Arc<RwLock<HashMap<NodeId, ResourceGradient>>>,
     /// Local gradient state
     local_gradient: Arc<RwLock<ResourceGradient>>,
-    /// Local credit balance
-    local_balance: Arc<RwLock<Credits>>,
+    /// Local economic state: spendable balance + credit→fiat reservations.
+    local_ledger: Arc<RwLock<ReservationLedger>>,
     /// Septal gates for nodes (circuit breaker state per node)
     septal_gates: Arc<RwLock<HashMap<NodeId, SeptalGate>>>,
     /// Publish function (connected to gossipsub)
@@ -158,7 +160,9 @@ impl EnrBridge {
             topology: Arc::new(RwLock::new(TopologyManager::new())),
             gradients: Arc::new(RwLock::new(HashMap::new())),
             local_gradient: Arc::new(RwLock::new(ResourceGradient::default())),
-            local_balance: Arc::new(RwLock::new(Credits::new(0))),
+            local_ledger: Arc::new(RwLock::new(ReservationLedger::new(
+                AccountId::node_account(local_id),
+            ))),
             septal_gates: Arc::new(RwLock::new(HashMap::new())),
             publish_fn: None,
             broadcast_handles: Vec::new(),
@@ -414,15 +418,44 @@ impl EnrBridge {
     // Credit Transfer
     // ========================================================================
 
-    /// Get local credit balance
+    /// Get local spendable credit balance (Active pool).
     pub async fn balance(&self) -> Credits {
-        *self.local_balance.read().await
+        self.local_ledger.read().await.balance()
     }
 
-    /// Set local credit balance
+    /// Set local credit balance (resets the ledger to a freshly-funded state).
     pub async fn set_balance(&self, balance: Credits) {
-        let mut local = self.local_balance.write().await;
-        *local = balance;
+        let mut local = self.local_ledger.write().await;
+        *local = ReservationLedger::with_balance(AccountId::node_account(self.local_id), balance);
+    }
+
+    /// Credits currently escrowed in open credit→fiat reservations.
+    pub async fn reserved_balance(&self) -> Credits {
+        self.local_ledger.read().await.reserved_total()
+    }
+
+    /// Reserve credits for a credit→fiat spend (Active → Reserved).
+    ///
+    /// Returns a [`ReservationId`] for `commit_reservation`/`release_reservation`.
+    pub async fn reserve(
+        &self,
+        amount: Credits,
+        ttl: crate::core::Duration,
+    ) -> Result<ReservationId, EnrError> {
+        self.local_ledger
+            .write()
+            .await
+            .reserve(amount, ttl, Timestamp::now())
+    }
+
+    /// Commit a held reservation (Reserved → Consumed) after the spend confirms.
+    pub async fn commit_reservation(&self, id: ReservationId) -> Result<Credits, EnrError> {
+        self.local_ledger.write().await.commit(id, Timestamp::now())
+    }
+
+    /// Release a held reservation (Reserved → Active) on failure/timeout.
+    pub async fn release_reservation(&self, id: ReservationId) -> Result<Credits, EnrError> {
+        self.local_ledger.write().await.release(id)
     }
 
     /// Transfer credits to another node
@@ -437,8 +470,8 @@ impl EnrBridge {
 
         // Check balance
         {
-            let current = self.local_balance.read().await;
-            if *current < amount {
+            let current = self.local_ledger.read().await.balance();
+            if current < amount {
                 return Err(TransferError::InsufficientBalance);
             }
         } // Drop read lock before acquiring write lock
@@ -459,10 +492,9 @@ impl EnrBridge {
             signature: Signature::empty(),
         };
 
-        // Reserve credits (deduct from local balance)
+        // Deduct from local balance (validated sufficient above).
         {
-            let mut balance = self.local_balance.write().await;
-            *balance = balance.saturating_sub(amount);
+            let _ = self.local_ledger.write().await.spend(amount);
         }
 
         // Store pending transfer
@@ -485,8 +517,10 @@ impl EnrBridge {
             CreditMessage::Transfer(transfer) => {
                 // If we're the recipient, credit our balance
                 if transfer.to == self.local_id {
-                    let mut balance = self.local_balance.write().await;
-                    *balance = *balance + Credits::new(transfer.amount);
+                    self.local_ledger
+                        .write()
+                        .await
+                        .fund(Credits::new(transfer.amount));
 
                     // Send confirmation
                     let confirmation = TransferConfirmation {
@@ -531,7 +565,7 @@ impl EnrBridge {
                 target,
             } => {
                 if target == self.local_id {
-                    let balance = self.local_balance.read().await;
+                    let balance = self.local_ledger.read().await.balance();
                     let response = CreditMessage::BalanceResponse {
                         node_id: self.local_id,
                         balance: balance.amount,
@@ -763,6 +797,54 @@ mod tests {
 
         bridge.set_balance(Credits::new(1000)).await;
         assert_eq!(bridge.balance().await, Credits::new(1000));
+    }
+
+    #[tokio::test]
+    async fn test_reservation_lifecycle() {
+        let bridge = EnrBridge::new(test_node_id(), EnrBridgeConfig::default());
+        bridge.set_balance(Credits::new(1000)).await;
+
+        // Reserve escrows out of spendable.
+        let id = bridge
+            .reserve(Credits::new(300), crate::core::Duration::seconds(60))
+            .await
+            .unwrap();
+        assert_eq!(bridge.balance().await, Credits::new(700));
+        assert_eq!(bridge.reserved_balance().await, Credits::new(300));
+
+        // Commit consumes it (spendable stays reduced, reservation cleared).
+        let amount = bridge.commit_reservation(id).await.unwrap();
+        assert_eq!(amount, Credits::new(300));
+        assert_eq!(bridge.balance().await, Credits::new(700));
+        assert_eq!(bridge.reserved_balance().await, Credits::zero());
+    }
+
+    #[tokio::test]
+    async fn test_reservation_release_restores_balance() {
+        let bridge = EnrBridge::new(test_node_id(), EnrBridgeConfig::default());
+        bridge.set_balance(Credits::new(500)).await;
+
+        let id = bridge
+            .reserve(Credits::new(200), crate::core::Duration::seconds(60))
+            .await
+            .unwrap();
+        assert_eq!(bridge.balance().await, Credits::new(300));
+
+        bridge.release_reservation(id).await.unwrap();
+        assert_eq!(bridge.balance().await, Credits::new(500));
+        assert_eq!(bridge.reserved_balance().await, Credits::zero());
+    }
+
+    #[tokio::test]
+    async fn test_reserve_insufficient_balance() {
+        let bridge = EnrBridge::new(test_node_id(), EnrBridgeConfig::default());
+        bridge.set_balance(Credits::new(100)).await;
+
+        let r = bridge
+            .reserve(Credits::new(500), crate::core::Duration::seconds(60))
+            .await;
+        assert!(matches!(r, Err(EnrError::InsufficientCredits { .. })));
+        assert_eq!(bridge.balance().await, Credits::new(100)); // untouched
     }
 
     #[tokio::test]
