@@ -8,7 +8,7 @@ module enr.core @ 0.1.0
 
 exegesis {
     Entropy-Nexus-Revival (ENR) is the foundational economic primitive
-    for the VUDO OS distributed computing platform. This module defines
+    for the VUDO distributed computing platform. This module defines
     the core types and contracts.
     
     ENR is inspired by biological mycelial networks:

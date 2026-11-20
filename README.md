@@ -36,7 +36,7 @@
 
 ### 1.1 What is ENR?
 
-**Entropy-Nexus-Revival (ENR)** is the foundational economic primitive layer for the VUDO OS distributed computing platform. It provides the substrate upon which all pricing models, resource allocation, and network economics are built.
+**Entropy-Nexus-Revival (ENR)** is the foundational economic primitive layer for the VUDO distributed computing platform. It provides the substrate upon which all pricing models, resource allocation, and network economics are built.
 
 ENR is inspired by the biological mechanics of mycelial networks, specifically:
 - **Entropy**: The thermodynamic cost of disorder in distributed systems
@@ -1034,7 +1034,7 @@ module enr.core @ 0.1.0
 
 exegesis {
     Entropy-Nexus-Revival (ENR) is the foundational economic primitive
-    for the VUDO OS distributed computing platform. This module defines
+    for the VUDO distributed computing platform. This module defines
     the core types and contracts.
 }
 

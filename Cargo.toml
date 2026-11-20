@@ -2,7 +2,7 @@
 name = "univrs-enr"
 version = "0.1.0"
 edition = "2021"
-description = "Entropy-Nexus-Revival economic primitive for VUDO OS"
+description = "Entropy-Nexus-Revival economic primitive for VUDO"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/univrs/enr"
 
