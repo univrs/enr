@@ -1,6 +1,6 @@
 //! univrs-enr: Entropy-Nexus-Revival Economic Primitive
 //!
-//! The foundational economic layer for VUDO OS.
+//! The foundational economic layer for VUDO.
 //!
 //! ## Overview
 //!
