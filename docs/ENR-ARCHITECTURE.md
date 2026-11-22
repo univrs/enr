@@ -1018,6 +1018,10 @@ COMPOSITE PRICING EXAMPLE: Spirit Execution
 
 ## 9. DOL Specifications
 
+> **Status (DOL 0.8.2):** these specifications are design documents. The `dol/*.dol` files in this
+> repo use pre-0.8 DOL syntax (`gene`, `exegesis`, …) and are not compiled: this crate has no DOL
+> dependency, and the Rust in `src/` is hand-written from them.
+
 ### 9.1 Core ENR Types
 
 ```dol
@@ -3163,6 +3167,11 @@ impl Default for TestClusterConfig {
 ---
 
 ## 13. Integration Points
+
+> **Status (DOL 0.8.2): Planned — not implemented.** None of the `host_enr_*` functions below exist.
+> The VUDO VM linker exposes 15 `vudo.host_*` functions, including six `host_credit_*` credit
+> operations. There is no `dol compile` command (Rust codegen is `dol-codegen --target rust`), and
+> DOL compiles directly from the AST to WASM, with no MLIR stage.
 
 ### 13.1 Integration with Existing Crates
 
