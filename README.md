@@ -3457,7 +3457,7 @@ Week 8: WASM Integration
 > [!IMPORTANT]
 > **This is an experimental system. _We break things frequently_.**
 
-- Not accepting contributions yet (but we plan to!)
+- Not accepting contributions
 - No stability guarantees
 - Pin commits if you need consistency
 - This is a learning resource, not production software
